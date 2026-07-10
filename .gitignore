@@ -1,0 +1,12 @@
+node_modules/
+dist/
+config.json
+.env
+.mcp-tokens.json
+E:\\WebDesignProjects\\mcp-email-calendar-contacts\\config.json
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.DS_Store
+.idea/
+.vscode/

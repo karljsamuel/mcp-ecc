@@ -1,0 +1,33 @@
+{
+  "name": "mcp-email-calendar-contacts",
+  "version": "1.0.0",
+  "description": "MCP Server for Email, Calendar, and Contacts with Headless OAuth Support",
+  "main": "dist/index.js",
+  "type": "module",
+  "bin": {
+    "mcp-ecc": "./dist/bin.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsc -w",
+    "configure": "node dist/cli.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.1",
+    "dotenv": "^16.4.5",
+    "googleapis": "^140.0.0",
+    "@microsoft/microsoft-graph-client": "^3.0.7",
+    "nodemailer": "^6.9.14",
+    "imap-simple": "^5.1.0",
+    "mailparser": "^3.7.1",
+    "axios": "^1.7.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.9",
+    "@types/nodemailer": "^6.4.15",
+    "@types/imap-simple": "^4.2.8",
+    "@types/mailparser": "^3.4.4",
+    "typescript": "^5.5.2"
+  }
+}
