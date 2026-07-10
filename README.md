@@ -59,25 +59,19 @@ It is specifically architected for **headless, remote, or containerized environm
    ```
 
 ### Configuration (`.env`)
-Create a `.env` file in the root directory to store client credentials and configurations:
+The local `.env` file only requires a master encryption key to encrypt token credentials:
 
 ```env
-# Encryption Key (Used to encrypt credentials.json via AES-256-GCM)
+# Encryption Key (Used to encrypt config.json via AES-256-GCM)
 # If omitted, credentials will be stored in plain JSON.
 MCP_ENCRYPTION_KEY=my_secure_encryption_key
 
-# Google OAuth Credentials (for Google Device Authorization Flow)
-GOOGLE_CLIENT_ID=your_google_client_id.apps.googleusercontent.com
-GOOGLE_CLIENT_SECRET=your_google_client_secret
-
-# Microsoft OAuth Credentials (for Microsoft Device Authorization Flow)
-MICROSOFT_CLIENT_ID=your_microsoft_client_id
-MICROSOFT_CLIENT_SECRET=your_microsoft_client_secret
-
 # Optional parameters
-# PORT=3001
-# MCP_STORAGE_FILE=./credentials.json
+# PORT=3000
+# MCP_STORAGE_FILE=./config.json
 ```
+
+All OAuth application details (Client ID, Client Secret, and Microsoft Tenant IDs for M365 accounts) are collected interactively during authentication and saved inside the localized `config.json` file per account. This allows multi-tenant, multi-app configurations for different mailboxes.
 
 ---
 
