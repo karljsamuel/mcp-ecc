@@ -1,4 +1,4 @@
-# MCP Email, Calendar, and Contacts Server
+# EMail Calendar Contact MCP Server (mcp-ecc)
 
 A comprehensive Model Context Protocol (MCP) server that aggregates email, calendar, and contacts across Google Workspace, Microsoft Graph (Office 365), Zoho Mail, and traditional IMAP/SMTP services. 
 
