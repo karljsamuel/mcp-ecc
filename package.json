@@ -1,6 +1,6 @@
 {
   "name": "mcp-email-calendar-contacts",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "description": "MCP Server for Email, Calendar, and Contacts with Headless OAuth Support",
   "main": "dist/index.js",
   "type": "module",
