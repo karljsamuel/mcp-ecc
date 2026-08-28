@@ -1,0 +1,41 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2022"],
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "composite": true,
+    "incremental": true,
+    "tsBuildInfoFile": ".tsbuildinfo",
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "baseUrl": ".",
+    "paths": {
+      "@mcp-ecc/provider-google": ["../providers/google/dist"],
+      "@mcp-ecc/provider-microsoft": ["../providers/microsoft/dist"],
+      "@mcp-ecc/provider-zoho": ["../providers/zoho/dist"],
+      "@mcp-ecc/provider-imap-smtp": ["../providers/imap-smtp/dist"],
+      "@mcp-ecc/provider-caldav": ["../providers/caldav/dist"],
+      "@mcp-ecc/provider-carddav": ["../providers/carddav/dist"]
+    }
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist"],
+  "references": [
+    { "path": "../core" },
+    { "path": "../providers/google" },
+    { "path": "../providers/microsoft" },
+    { "path": "../providers/zoho" },
+    { "path": "../providers/imap-smtp" },
+    { "path": "../providers/caldav" },
+    { "path": "../providers/carddav" }
+  ]
+}

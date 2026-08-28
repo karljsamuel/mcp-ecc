@@ -1,0 +1,31 @@
+{
+  "name": "@mcp-ecc/provider-carddav",
+  "version": "0.1.0",
+  "description": "CardDAV provider for mcp-ecc",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc -w",
+    "clean": "rm -rf dist .tsbuildinfo",
+    "lint": "eslint src --ext .ts",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@mcp-ecc/core": "file:../../core",
+    "tsdav": "^2.3.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "@types/node": "^20.14.0",
+    "vitest": "^2.0.0",
+    "eslint": "^9.0.0"
+  }
+}

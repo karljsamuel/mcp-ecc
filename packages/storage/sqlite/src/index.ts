@@ -1,0 +1,792 @@
+import Database from 'better-sqlite3';
+import * as crypto from 'crypto';
+import * as path from 'path';
+import * as fs from 'fs';
+import type {
+  StorageAdapter,
+  Account,
+  AccountCredentials,
+  SyncState,
+  Settings,
+  EmailMessage,
+  MailFolder,
+  CalendarEvent,
+  Calendar,
+  Contact,
+  OAuthStateData,
+} from '@mcp-ecc/core';
+import { generateId } from '@mcp-ecc/core';
+
+interface DBAccount {
+  id: string;
+  provider: string;
+  email: string;
+  display_name: string | null;
+  credentials_json: string; // encrypted
+  status: string;
+  last_sync_at: number | null;
+  created_at: number;
+  updated_at: number;
+}
+
+interface DBSyncState {
+  account_id: string;
+  mail_cursor: string | null;
+  contacts_cursor: string | null;
+  calendar_cursor: string | null;
+  last_full_sync: number | null;
+  updated_at: number;
+}
+
+interface DBSettings {
+  key: string;
+  value: string;
+  updated_at: number;
+}
+
+interface DBOAuthState {
+  state: string;
+  data_json: string;
+  created_at: number;
+}
+
+interface DBMailMessage {
+  id: string;
+  account_id: string;
+  folder_id: string;
+  thread_id: string | null;
+  from_addr: string;
+  to_addrs: string; // JSON
+  cc_addrs: string; // JSON
+  bcc_addrs: string; // JSON
+  subject: string;
+  snippet: string | null;
+  body: string | null;
+  html_body: string | null;
+  date: number;
+  unread: number;
+  starred: number;
+  labels_or_folders: string; // JSON
+  attachments: string | null; // JSON
+  headers: string | null; // JSON
+  created_at: number;
+  updated_at: number;
+}
+
+interface DBMailFolder {
+  id: string;
+  account_id: string;
+  name: string;
+  parent_id: string | null;
+  type: string;
+  unread_count: number;
+  total_count: number;
+  created_at: number;
+  updated_at: number;
+}
+
+interface DBCalendarEvent {
+  id: string;
+  account_id: string;
+  calendar_id: string;
+  summary: string;
+  description: string | null;
+  location: string | null;
+  start_at: number;
+  end_at: number;
+  all_day: number;
+  status: string;
+  attendees: string | null; // JSON
+  recurrence_rule: string | null;
+  raw: string | null; // JSON
+  created_at: number;
+  updated_at: number;
+}
+
+interface DBCalendar {
+  id: string;
+  account_id: string;
+  external_id: string | null;
+  name: string;
+  description: string | null;
+  color: string | null;
+  primary_calendar: number;
+  access_role: string;
+  created_at: number;
+  updated_at: number;
+}
+
+interface DBContact {
+  id: string;
+  account_id: string;
+  external_id: string | null;
+  display_name: string;
+  emails: string; // JSON
+  phones: string | null; // JSON
+  addresses: string | null; // JSON
+  organization: string | null;
+  job_title: string | null;
+  notes: string | null;
+  raw: string | null; // JSON
+  created_at: number;
+  updated_at: number;
+}
+
+export class SQLiteStorage implements StorageAdapter {
+  private db: Database.Database;
+  private encryptionKey: Buffer;
+
+  constructor(dbPath: string, encryptionKey?: string) {
+    // Ensure directory exists
+    const dir = path.dirname(dbPath);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+
+    this.db = new Database(dbPath);
+    this.db.pragma('journal_mode = WAL');
+    this.db.pragma('foreign_keys = ON');
+
+    // Derive encryption key
+    const keyMaterial = encryptionKey || process.env.MCP_ENCRYPTION_KEY || 'default-key-change-in-production';
+    this.encryptionKey = crypto.scryptSync(keyMaterial, 'mcp-ecc-salt', 32);
+
+    this.initSchema();
+  }
+
+  private initSchema(): void {
+    // Accounts table
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS accounts (
+        id TEXT PRIMARY KEY,
+        provider TEXT NOT NULL,
+        email TEXT NOT NULL,
+        display_name TEXT,
+        credentials_json TEXT NOT NULL,
+        status TEXT DEFAULT 'active',
+        last_sync_at INTEGER,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )
+    `);
+
+    // Sync state table
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS sync_state (
+        account_id TEXT PRIMARY KEY,
+        mail_cursor TEXT,
+        contacts_cursor TEXT,
+        calendar_cursor TEXT,
+        last_full_sync INTEGER,
+        updated_at INTEGER NOT NULL,
+        FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
+      )
+    `);
+
+    // Settings table
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      )
+    `);
+
+    // OAuth state table (temporary)
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS oauth_states (
+        state TEXT PRIMARY KEY,
+        data_json TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      )
+    `);
+
+    // Mail messages table (cached metadata)
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS mail_messages (
+        id TEXT PRIMARY KEY,
+        account_id TEXT NOT NULL,
+        folder_id TEXT NOT NULL,
+        thread_id TEXT,
+        from_addr TEXT NOT NULL,
+        to_addrs TEXT NOT NULL,
+        cc_addrs TEXT NOT NULL,
+        bcc_addrs TEXT NOT NULL,
+        subject TEXT,
+        snippet TEXT,
+        body TEXT,
+        html_body TEXT,
+        date INTEGER NOT NULL,
+        unread INTEGER NOT NULL DEFAULT 0,
+        starred INTEGER NOT NULL DEFAULT 0,
+        labels_or_folders TEXT NOT NULL,
+        attachments TEXT,
+        headers TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
+      )
+    `);
+
+    // Mail folders table
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS mail_folders (
+        id TEXT PRIMARY KEY,
+        account_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        parent_id TEXT,
+        type TEXT NOT NULL,
+        unread_count INTEGER DEFAULT 0,
+        total_count INTEGER DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
+      )
+    `);
+
+    // Calendar events table
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS calendar_events (
+        id TEXT PRIMARY KEY,
+        account_id TEXT NOT NULL,
+        calendar_id TEXT NOT NULL,
+        summary TEXT,
+        description TEXT,
+        location TEXT,
+        start_at INTEGER NOT NULL,
+        end_at INTEGER NOT NULL,
+        all_day INTEGER NOT NULL DEFAULT 0,
+        status TEXT,
+        attendees TEXT,
+        recurrence_rule TEXT,
+        raw TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE,
+        UNIQUE(account_id, calendar_id, id)
+      )
+    `);
+
+    // Calendars table
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS calendars (
+        id TEXT PRIMARY KEY,
+        account_id TEXT NOT NULL,
+        external_id TEXT,
+        name TEXT NOT NULL,
+        description TEXT,
+        color TEXT,
+        primary_calendar INTEGER NOT NULL DEFAULT 0,
+        access_role TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE,
+        UNIQUE(account_id, external_id)
+      )
+    `);
+
+    // Contacts table
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS contacts (
+        id TEXT PRIMARY KEY,
+        account_id TEXT NOT NULL,
+        external_id TEXT,
+        display_name TEXT NOT NULL,
+        emails TEXT NOT NULL,
+        phones TEXT,
+        addresses TEXT,
+        organization TEXT,
+        job_title TEXT,
+        notes TEXT,
+        raw TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE,
+        UNIQUE(account_id, external_id)
+      )
+    `);
+
+    // Indexes
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_mail_account_folder ON mail_messages(account_id, folder_id);
+      CREATE INDEX IF NOT EXISTS idx_mail_date ON mail_messages(account_id, date DESC);
+      CREATE INDEX IF NOT EXISTS idx_mail_unread ON mail_messages(account_id, unread, date DESC);
+      CREATE INDEX IF NOT EXISTS idx_contacts_account ON contacts(account_id);
+      CREATE INDEX IF NOT EXISTS idx_events_account_range ON calendar_events(account_id, start_at, end_at);
+      CREATE INDEX IF NOT EXISTS idx_calendars_account ON calendars(account_id);
+    `);
+  }
+
+  private encrypt(data: string): string {
+    const iv = crypto.randomBytes(16);
+    const cipher = crypto.createCipheriv('aes-256-gcm', this.encryptionKey, iv);
+    let encrypted = cipher.update(data, 'utf8', 'hex');
+    encrypted += cipher.final('hex');
+    const authTag = cipher.getAuthTag().toString('hex');
+    return JSON.stringify({ iv: iv.toString('hex'), encrypted, tag: authTag });
+  }
+
+  private decrypt(encryptedJson: string): string {
+    const { iv, encrypted, tag } = JSON.parse(encryptedJson);
+    const decipher = crypto.createDecipheriv(
+      'aes-256-gcm',
+      this.encryptionKey,
+      Buffer.from(iv, 'hex')
+    );
+    decipher.setAuthTag(Buffer.from(tag, 'hex'));
+    let decrypted = decipher.update(encrypted, 'hex', 'utf8');
+    decrypted += decipher.final('utf8');
+    return decrypted;
+  }
+
+  // Account management
+  async getAccount(id: string): Promise<Account | null> {
+    const row = this.db.prepare('SELECT * FROM accounts WHERE id = ?').get(id) as DBAccount | undefined;
+    if (!row) return null;
+    return this.mapAccount(row);
+  }
+
+  async listAccounts(): Promise<Account[]> {
+    const rows = this.db.prepare('SELECT * FROM accounts').all() as DBAccount[];
+    return rows.map(r => this.mapAccount(r));
+  }
+
+  async saveAccount(account: Account): Promise<void> {
+    const now = Date.now();
+    const existing = this.db.prepare('SELECT id FROM accounts WHERE id = ?').get(account.id);
+    const credentialsJson = this.encrypt(JSON.stringify(account.credentials));
+
+    if (existing) {
+      this.db.prepare(`
+        UPDATE accounts SET provider = ?, email = ?, display_name = ?, credentials_json = ?, status = ?, last_sync_at = ?, updated_at = ?
+        WHERE id = ?
+      `).run(account.provider, account.email, account.displayName || null, credentialsJson, account.status, account.lastSyncAt || null, now, account.id);
+    } else {
+      this.db.prepare(`
+        INSERT INTO accounts (id, provider, email, display_name, credentials_json, status, last_sync_at, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(account.id, account.provider, account.email, account.displayName || null, credentialsJson, account.status, account.lastSyncAt || null, now, now);
+    }
+  }
+
+  async deleteAccount(id: string): Promise<void> {
+    this.db.prepare('DELETE FROM accounts WHERE id = ?').run(id);
+  }
+
+  async updateAccount(id: string, updates: Partial<Account>): Promise<void> {
+    const fields: string[] = [];
+    const values: unknown[] = [];
+
+    if (updates.provider) { fields.push('provider = ?'); values.push(updates.provider); }
+    if (updates.email) { fields.push('email = ?'); values.push(updates.email); }
+    if (updates.displayName !== undefined) { fields.push('display_name = ?'); values.push(updates.displayName); }
+    if (updates.status) { fields.push('status = ?'); values.push(updates.status); }
+    if (updates.lastSyncAt !== undefined) { fields.push('last_sync_at = ?'); values.push(updates.lastSyncAt); }
+    if (updates.credentials) {
+      fields.push('credentials_json = ?');
+      values.push(this.encrypt(JSON.stringify(updates.credentials)));
+    }
+
+    if (fields.length === 0) return;
+
+    fields.push('updated_at = ?');
+    values.push(Date.now());
+    values.push(id);
+
+    this.db.prepare(`UPDATE accounts SET ${fields.join(', ')} WHERE id = ?`).run(...values);
+  }
+
+  // Credentials
+  async getCredentials(accountId: string): Promise<AccountCredentials | null> {
+    const row = this.db.prepare('SELECT credentials_json FROM accounts WHERE id = ?').get(accountId) as { credentials_json: string } | undefined;
+    if (!row) return null;
+    return JSON.parse(this.decrypt(row.credentials_json));
+  }
+
+  async saveCredentials(accountId: string, credentials: AccountCredentials): Promise<void> {
+    this.db.prepare('UPDATE accounts SET credentials_json = ?, updated_at = ? WHERE id = ?')
+      .run(this.encrypt(JSON.stringify(credentials)), Date.now(), accountId);
+  }
+
+  async updateCredentials(accountId: string, updates: Partial<AccountCredentials>): Promise<void> {
+    const current = await this.getCredentials(accountId);
+    if (!current) throw new Error('Account not found');
+    await this.saveCredentials(accountId, { ...current, ...updates });
+  }
+
+  // Sync state
+  async getSyncState(accountId: string): Promise<SyncState | null> {
+    const row = this.db.prepare('SELECT * FROM sync_state WHERE account_id = ?').get(accountId) as DBSyncState | undefined;
+    if (!row) return null;
+    return {
+      accountId: row.account_id,
+      mailCursor: row.mail_cursor || undefined,
+      contactsCursor: row.contacts_cursor || undefined,
+      calendarCursor: row.calendar_cursor || undefined,
+      lastFullSync: row.last_full_sync || undefined,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  async saveSyncState(state: SyncState): Promise<void> {
+    this.db.prepare(`
+      INSERT INTO sync_state (account_id, mail_cursor, contacts_cursor, calendar_cursor, last_full_sync, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(account_id) DO UPDATE SET
+        mail_cursor = excluded.mail_cursor,
+        contacts_cursor = excluded.contacts_cursor,
+        calendar_cursor = excluded.calendar_cursor,
+        last_full_sync = excluded.last_full_sync,
+        updated_at = excluded.updated_at
+    `).run(state.accountId, state.mailCursor || null, state.contactsCursor || null, state.calendarCursor || null, state.lastFullSync || null, state.updatedAt);
+  }
+
+  // Settings
+  async getSettings(): Promise<Settings> {
+    const rows = this.db.prepare('SELECT * FROM settings').all() as DBSettings[];
+    const settings: Settings = { updatedAt: 0 };
+    for (const row of rows) {
+      if (row.key === 'encryptionKey') settings.encryptionKey = row.value;
+      else if (row.key === 'uiPreferences') settings.uiPreferences = JSON.parse(row.value);
+      settings.updatedAt = Math.max(settings.updatedAt, row.updated_at);
+    }
+    return settings;
+  }
+
+  async saveSettings(settings: Settings): Promise<void> {
+    const now = Date.now();
+    if (settings.encryptionKey) {
+      this.db.prepare(`
+        INSERT INTO settings (key, value, updated_at) VALUES ('encryptionKey', ?, ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+      `).run(settings.encryptionKey, now);
+    }
+    if (settings.uiPreferences) {
+      this.db.prepare(`
+        INSERT INTO settings (key, value, updated_at) VALUES ('uiPreferences', ?, ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+      `).run(JSON.stringify(settings.uiPreferences), now);
+    }
+  }
+
+  // OAuth state
+  async saveOAuthState(state: string, data: OAuthStateData): Promise<void> {
+    this.db.prepare(`
+      INSERT INTO oauth_states (state, data_json, created_at) VALUES (?, ?, ?)
+      ON CONFLICT(state) DO UPDATE SET data_json = excluded.data_json, created_at = excluded.created_at
+    `).run(state, JSON.stringify(data), data.createdAt);
+  }
+
+  async getOAuthState(state: string): Promise<OAuthStateData | null> {
+    const row = this.db.prepare('SELECT * FROM oauth_states WHERE state = ?').get(state) as DBOAuthState | undefined;
+    if (!row) return null;
+    return JSON.parse(row.data_json);
+  }
+
+  async deleteOAuthState(state: string): Promise<void> {
+    this.db.prepare('DELETE FROM oauth_states WHERE state = ?').run(state);
+  }
+
+  // Mail metadata
+  async saveMailMessages(accountId: string, messages: EmailMessage[]): Promise<void> {
+    const stmt = this.db.prepare(`
+      INSERT INTO mail_messages (id, account_id, folder_id, thread_id, from_addr, to_addrs, cc_addrs, bcc_addrs, subject, snippet, body, html_body, date, unread, starred, labels_or_folders, attachments, headers, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        folder_id = excluded.folder_id,
+        thread_id = excluded.thread_id,
+        from_addr = excluded.from_addr,
+        to_addrs = excluded.to_addrs,
+        cc_addrs = excluded.cc_addrs,
+        bcc_addrs = excluded.bcc_addrs,
+        subject = excluded.subject,
+        snippet = excluded.snippet,
+        body = excluded.body,
+        html_body = excluded.html_body,
+        date = excluded.date,
+        unread = excluded.unread,
+        starred = excluded.starred,
+        labels_or_folders = excluded.labels_or_folders,
+        attachments = excluded.attachments,
+        headers = excluded.headers,
+        updated_at = excluded.updated_at
+    `);
+
+    const now = Date.now();
+    for (const msg of messages) {
+      stmt.run(
+        msg.id, accountId, msg.labelsOrFolders[0] || 'INBOX', msg.threadId || null,
+        msg.from.address,
+        JSON.stringify(msg.to.map(t => t.address)),
+        JSON.stringify(msg.cc?.map(t => t.address) || []),
+        JSON.stringify(msg.bcc?.map(t => t.address) || []),
+        msg.subject, msg.snippet || null, msg.body || null, msg.htmlBody || null,
+        msg.date, msg.unread ? 1 : 0, msg.starred ? 1 : 0,
+        JSON.stringify(msg.labelsOrFolders),
+        msg.attachments ? JSON.stringify(msg.attachments) : null,
+        msg.headers ? JSON.stringify(msg.headers) : null,
+        now, now
+      );
+    }
+  }
+
+  async getMailMessages(accountId: string, folderId: string, limit: number, cursor?: string): Promise<EmailMessage[]> {
+    let sql = 'SELECT * FROM mail_messages WHERE account_id = ? AND folder_id = ?';
+    const params: unknown[] = [accountId, folderId];
+
+    if (cursor) {
+      sql += ' AND date < ?';
+      params.push(parseInt(cursor, 10));
+    }
+
+    sql += ' ORDER BY date DESC LIMIT ?';
+    params.push(limit);
+
+    const rows = this.db.prepare(sql).all(...params) as DBMailMessage[];
+    return rows.map(r => this.mapMailMessage(r));
+  }
+
+  async saveMailFolders(accountId: string, folders: MailFolder[]): Promise<void> {
+    const stmt = this.db.prepare(`
+      INSERT INTO mail_folders (id, account_id, name, parent_id, type, unread_count, total_count, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        name = excluded.name,
+        parent_id = excluded.parent_id,
+        type = excluded.type,
+        unread_count = excluded.unread_count,
+        total_count = excluded.total_count,
+        updated_at = excluded.updated_at
+    `);
+
+    const now = Date.now();
+    for (const folder of folders) {
+      stmt.run(folder.id, accountId, folder.name, folder.parentId || null, folder.type, folder.unreadCount, folder.totalCount, now, now);
+    }
+  }
+
+  async getMailFolders(accountId: string): Promise<MailFolder[]> {
+    const rows = this.db.prepare('SELECT * FROM mail_folders WHERE account_id = ?').all(accountId) as DBMailFolder[];
+    return rows.map(r => ({
+      id: r.id,
+      name: r.name,
+      parentId: r.parent_id || undefined,
+      type: r.type as MailFolder['type'],
+      unreadCount: r.unread_count,
+      totalCount: r.total_count,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+    }));
+  }
+
+  // Calendar metadata
+  async saveCalendarEvents(accountId: string, calendarId: string, events: CalendarEvent[]): Promise<void> {
+    const stmt = this.db.prepare(`
+      INSERT INTO calendar_events (id, account_id, calendar_id, summary, description, location, start_at, end_at, all_day, status, attendees, recurrence_rule, raw, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(account_id, calendar_id, id) DO UPDATE SET
+        summary = excluded.summary,
+        description = excluded.description,
+        location = excluded.location,
+        start_at = excluded.start_at,
+        end_at = excluded.end_at,
+        all_day = excluded.all_day,
+        status = excluded.status,
+        attendees = excluded.attendees,
+        recurrence_rule = excluded.recurrence_rule,
+        raw = excluded.raw,
+        updated_at = excluded.updated_at
+    `);
+
+    const now = Date.now();
+    for (const evt of events) {
+      stmt.run(
+        evt.id, accountId, calendarId, evt.summary, evt.description || null, evt.location || null,
+        evt.startAt, evt.endAt, evt.allDay ? 1 : 0, evt.status,
+        evt.attendees ? JSON.stringify(evt.attendees) : null,
+        evt.recurrenceRule || null,
+        evt.raw ? JSON.stringify(evt.raw) : null,
+        now, now
+      );
+    }
+  }
+
+  async getCalendarEvents(accountId: string, calendarId: string, timeMin: number, timeMax: number): Promise<CalendarEvent[]> {
+    const rows = this.db.prepare(`
+      SELECT * FROM calendar_events
+      WHERE account_id = ? AND calendar_id = ? AND end_at >= ? AND start_at <= ?
+      ORDER BY start_at ASC
+    `).all(accountId, calendarId, timeMin, timeMax) as DBCalendarEvent[];
+    return rows.map(r => this.mapCalendarEvent(r));
+  }
+
+  async saveCalendars(accountId: string, calendars: Calendar[]): Promise<void> {
+    const stmt = this.db.prepare(`
+      INSERT INTO calendars (id, account_id, external_id, name, description, color, primary_calendar, access_role, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(account_id, external_id) DO UPDATE SET
+        name = excluded.name,
+        description = excluded.description,
+        color = excluded.color,
+        primary_calendar = excluded.primary_calendar,
+        access_role = excluded.access_role,
+        updated_at = excluded.updated_at
+    `);
+
+    const now = Date.now();
+    for (const cal of calendars) {
+      stmt.run(cal.id, accountId, cal.id, cal.name, cal.description || null, cal.color || null, cal.primary ? 1 : 0, cal.accessRole, now, now);
+    }
+  }
+
+  async getCalendars(accountId: string): Promise<Calendar[]> {
+    const rows = this.db.prepare('SELECT * FROM calendars WHERE account_id = ?').all(accountId) as DBCalendar[];
+    return rows.map(r => ({
+      id: r.id,
+      name: r.name,
+      description: r.description || undefined,
+      color: r.color || undefined,
+      primary: r.primary_calendar === 1,
+      accessRole: r.access_role as Calendar['accessRole'],
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+    }));
+  }
+
+  // Contacts metadata
+  async saveContacts(accountId: string, contacts: Contact[]): Promise<void> {
+    const stmt = this.db.prepare(`
+      INSERT INTO contacts (id, account_id, external_id, display_name, emails, phones, addresses, organization, job_title, notes, raw, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(account_id, external_id) DO UPDATE SET
+        display_name = excluded.display_name,
+        emails = excluded.emails,
+        phones = excluded.phones,
+        addresses = excluded.addresses,
+        organization = excluded.organization,
+        job_title = excluded.job_title,
+        notes = excluded.notes,
+        raw = excluded.raw,
+        updated_at = excluded.updated_at
+    `);
+
+    const now = Date.now();
+    for (const contact of contacts) {
+      stmt.run(
+        contact.id, accountId, contact.id, contact.displayName,
+        JSON.stringify(contact.emails),
+        contact.phones ? JSON.stringify(contact.phones) : null,
+        contact.addresses ? JSON.stringify(contact.addresses) : null,
+        contact.organization || null, contact.jobTitle || null, contact.notes || null,
+        contact.raw ? JSON.stringify(contact.raw) : null,
+        now, now
+      );
+    }
+  }
+
+  async getContacts(accountId: string, limit: number, cursor?: string): Promise<Contact[]> {
+    let sql = 'SELECT * FROM contacts WHERE account_id = ?';
+    const params: unknown[] = [accountId];
+
+    if (cursor) {
+      sql += ' AND id > ?';
+      params.push(cursor);
+    }
+
+    sql += ' ORDER BY id LIMIT ?';
+    params.push(limit);
+
+    const rows = this.db.prepare(sql).all(...params) as DBContact[];
+    return rows.map(r => this.mapContact(r));
+  }
+
+  async searchContacts(accountId: string, query: string, limit: number): Promise<Contact[]> {
+    const rows = this.db.prepare(`
+      SELECT * FROM contacts
+      WHERE account_id = ? AND (display_name LIKE ? OR emails LIKE ?)
+      ORDER BY display_name LIMIT ?
+    `).all(accountId, `%${query}%`, `%${query}%`, limit) as DBContact[];
+    return rows.map(r => this.mapContact(r));
+  }
+
+  // Health & close
+  async healthCheck(): Promise<boolean> {
+    try {
+      this.db.prepare('SELECT 1').get();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async close(): Promise<void> {
+    this.db.close();
+  }
+
+  // Mapping helpers
+  private mapAccount(row: DBAccount): Account {
+    return {
+      id: row.id,
+      provider: row.provider as Account['provider'],
+      email: row.email,
+      displayName: row.display_name || undefined,
+      credentials: JSON.parse(this.decrypt(row.credentials_json)),
+      status: row.status as Account['status'],
+      lastSyncAt: row.last_sync_at || undefined,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  private mapMailMessage(row: DBMailMessage): EmailMessage {
+    return {
+      id: row.id,
+      threadId: row.thread_id || undefined,
+      from: { address: row.from_addr },
+      to: JSON.parse(row.to_addrs).map((address: string) => ({ address })),
+      cc: JSON.parse(row.cc_addrs).map((address: string) => ({ address })),
+      bcc: JSON.parse(row.bcc_addrs).map((address: string) => ({ address })),
+      subject: row.subject,
+      snippet: row.snippet || undefined,
+      body: row.body || undefined,
+      htmlBody: row.html_body || undefined,
+      date: row.date,
+      unread: row.unread === 1,
+      starred: row.starred === 1,
+      labelsOrFolders: JSON.parse(row.labels_or_folders),
+      attachments: row.attachments ? JSON.parse(row.attachments) : undefined,
+      headers: row.headers ? JSON.parse(row.headers) : undefined,
+    };
+  }
+
+  private mapCalendarEvent(row: DBCalendarEvent): CalendarEvent {
+    return {
+      id: row.id,
+      calendarId: row.calendar_id,
+      summary: row.summary,
+      description: row.description || undefined,
+      location: row.location || undefined,
+      startAt: row.start_at,
+      endAt: row.end_at,
+      allDay: row.all_day === 1,
+      status: row.status as CalendarEvent['status'],
+      attendees: row.attendees ? JSON.parse(row.attendees) : undefined,
+      recurrenceRule: row.recurrence_rule || undefined,
+      raw: row.raw ? JSON.parse(row.raw) : undefined,
+    };
+  }
+
+  private mapContact(row: DBContact): Contact {
+    return {
+      id: row.id,
+      displayName: row.display_name,
+      emails: JSON.parse(row.emails),
+      phones: row.phones ? JSON.parse(row.phones) : undefined,
+      addresses: row.addresses ? JSON.parse(row.addresses) : undefined,
+      organization: row.organization || undefined,
+      jobTitle: row.job_title || undefined,
+      notes: row.notes || undefined,
+      raw: row.raw ? JSON.parse(row.raw) : undefined,
+    };
+  }
+}

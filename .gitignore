@@ -10,3 +10,9 @@ yarn-error.log*
 .DS_Store
 .idea/
 .vscode/
+.turbo/
+*.tsbuildinfo
+# Compiled artifacts accidentally emitted into src (should not exist; keep ignored)
+packages/*/src/*.js
+packages/*/src/*.d.ts
+packages/*/src/*.map

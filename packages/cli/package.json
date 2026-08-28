@@ -1,0 +1,31 @@
+{
+  "name": "@mcp-ecc/cli",
+  "version": "0.1.0",
+  "description": "CLI for mcp-ecc",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "mcp-ecc": "./dist/bin.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc -w",
+    "clean": "rm -rf dist .tsbuildinfo",
+    "lint": "eslint src --ext .ts",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@mcp-ecc/core": "file:../core",
+    "@mcp-ecc/storage-memory": "file:../storage-memory",
+    "@mcp-ecc/mcp-server": "file:../mcp-server",
+    "commander": "^12.0.0",
+    "chalk": "^5.3.0",
+    "dotenv": "^16.4.5"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "@types/node": "^20.14.0",
+    "vitest": "^2.0.0",
+    "eslint": "^9.0.0"
+  }
+}

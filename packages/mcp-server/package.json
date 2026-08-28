@@ -1,0 +1,37 @@
+{
+  "name": "@mcp-ecc/mcp-server",
+  "version": "0.1.0",
+  "description": "MCP Server for mcp-ecc",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc -w",
+    "clean": "rm -rf dist .tsbuildinfo",
+    "lint": "eslint src --ext .ts",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@mcp-ecc/core": "file:../core",
+    "@mcp-ecc/provider-google": "file:../providers/google",
+    "@mcp-ecc/provider-microsoft": "file:../providers/microsoft",
+    "@mcp-ecc/provider-zoho": "file:../providers/zoho",
+    "@mcp-ecc/provider-imap-smtp": "file:../providers/imap-smtp",
+    "@mcp-ecc/provider-caldav": "file:../providers/caldav",
+    "@mcp-ecc/provider-carddav": "file:../providers/carddav",
+    "@modelcontextprotocol/sdk": "^1.0.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "@types/node": "^20.14.0",
+    "vitest": "^2.0.0",
+    "eslint": "^9.0.0"
+  }
+}

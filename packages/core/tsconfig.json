@@ -15,10 +15,9 @@
     "composite": true,
     "incremental": true,
     "tsBuildInfoFile": ".tsbuildinfo",
-    "baseUrl": ".",
-    "paths": {
-      "@mcp-ecc/*": ["packages/*/src"]
-    }
+    "outDir": "./dist",
+    "rootDir": "./src"
   },
-  "exclude": ["node_modules", "dist", "packages/*/dist", "packages/*/node_modules"]
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist"]
 }

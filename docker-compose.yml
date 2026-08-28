@@ -1,13 +1,44 @@
 services:
   mcp-ecc:
-    build: .
-    container_name: mcp-email-calendar-contacts
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mcp-ecc
     restart: unless-stopped
     ports:
       - "3000:3000"
     environment:
-      - PORT=3000
       - MCP_ENCRYPTION_KEY=${MCP_ENCRYPTION_KEY}
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+      - MICROSOFT_CLIENT_ID=${MICROSOFT_CLIENT_ID}
+      - MICROSOFT_CLIENT_SECRET=${MICROSOFT_CLIENT_SECRET}
+      - ZOHO_CLIENT_ID=${ZOHO_CLIENT_ID}
+      - ZOHO_CLIENT_SECRET=${ZOHO_CLIENT_SECRET}
     volumes:
       - ./data:/data
-    command: ["start", "--sse"]
+    command: ["start"]
+
+  # Management API with web UI
+  mcp-ecc-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: mcp-ecc-api
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      - MCP_ENCRYPTION_KEY=${MCP_ENCRYPTION_KEY}
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+      - MICROSOFT_CLIENT_ID=${MICROSOFT_CLIENT_ID}
+      - MICROSOFT_CLIENT_SECRET=${MICROSOFT_CLIENT_SECRET}
+      - ZOHO_CLIENT_ID=${ZOHO_CLIENT_ID}
+      - ZOHO_CLIENT_SECRET=${ZOHO_CLIENT_SECRET}
+      - BASE_URL=http://localhost:3001
+      - PORT=3001
+    volumes:
+      - ./data:/data
+    depends_on:
+      - mcp-ecc

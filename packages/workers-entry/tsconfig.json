@@ -1,9 +1,10 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
-    "lib": ["ES2022"],
+    "module": "ESNext",
+    "moduleResolution": "Node",
+    "lib": ["ES2022", "WebWorker"],
+    "types": ["@cloudflare/workers-types"],
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
@@ -12,13 +13,10 @@
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true,
-    "composite": true,
-    "incremental": true,
+    "composite": false,
     "tsBuildInfoFile": ".tsbuildinfo",
-    "baseUrl": ".",
-    "paths": {
-      "@mcp-ecc/*": ["packages/*/src"]
-    }
+    "outDir": "./dist"
   },
-  "exclude": ["node_modules", "dist", "packages/*/dist", "packages/*/node_modules"]
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist"]
 }

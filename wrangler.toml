@@ -1,0 +1,25 @@
+name = "mcp-ecc"
+main = "dist/index.js"
+compatibility_date = "2024-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+[env]
+MCP_ENCRYPTION_KEY = ""
+GOOGLE_CLIENT_ID = ""
+GOOGLE_CLIENT_SECRET = ""
+MICROSOFT_CLIENT_ID = ""
+MICROSOFT_CLIENT_SECRET = ""
+ZOHO_CLIENT_ID = ""
+ZOHO_CLIENT_SECRET = ""
+BASE_URL = "https://mcp-ecc.yourdomain.workers.dev"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "mcp-ecc"
+database_id = ""
+
+[env.staging]
+BASE_URL = "https://mcp-ecc-staging.yourdomain.workers.dev"
+
+[env.production]
+BASE_URL = "https://mcp-ecc.yourdomain.workers.dev"
