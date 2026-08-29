@@ -40,11 +40,10 @@ COPY --from=builder /app/packages ./packages
 COPY --from=builder /app/turbo.json ./turbo.json
 
 # Keep only production deps (drops dev deps; keeps workspace links + built dist)
-RUN npm prune --omit=dev --ignore-scripts
+RUN npm prune --omit=dev --ignore-scripts && \
+    mkdir -p /data && chown -R mcp-ecc:nodejs /data
 
 USER mcp-ecc
-
-RUN mkdir -p /data && chown -R mcp-ecc:nodejs /data
 
 EXPOSE 3001
 
