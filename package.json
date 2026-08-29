@@ -20,14 +20,14 @@
     "workers:deploy": "cd packages/workers-entry && wrangler deploy"
   },
   "devDependencies": {
-    "turbo": "^1.13.0",
+    "turbo": "^2.10.0",
     "prettier": "^3.2.0",
     "husky": "^9.0.0",
     "typescript": "^5.5.0",
-    "@types/node": "^20.14.0"
+    "@types/node": "^24.0.0"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=24.0.0"
   },
   "packageManager": "npm@10.8.0"
 }
