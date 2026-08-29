@@ -51,13 +51,13 @@ mcp-ecc has **three** supported deployment modes. Each is documented fully under
 | Mode | Runtime | Storage | Best for | Doc |
 |------|---------|---------|----------|-----|
 | **Local / CLI** | Node.js 20+ | SQLite or in-memory | Single-user agent hosts; stdio transport | [`docs/deployment-cli.md`](docs/deployment-cli.md) |
-| **Docker** | Containers | SQLite on a volume | Self-hosted server + web UI; all providers | [`docs/deployment-docker.md`](docs/deployment-docker.md) |
+| **Docker (single container)** | Containers | SQLite on a volume | Self-hosted server: web UI + REST + MCP on one port; all providers | [`docs/deployment-docker.md`](docs/deployment-docker.md) |
 | **Cloudflare Workers** | Edge / serverless | D1 | Global HTTP endpoint; cloud API providers only | [`docs/deployment-cloudflare-workers.md`](docs/deployment-cloudflare-workers.md) |
 
 ### Which mode suits your needs?
 
-- **Want to connect an MT desktop agent quickly?** → Local/CLI (stdio).
-- **Want a persistent server with a browser UI, all providers, and remote access?** → Docker.
+- **Want to connect a desktop agent quickly?** → Local/CLI (stdio).
+- **Want a persistent server with a browser UI, all providers, and remote access?** → Docker (single container, one port: web UI + REST + MCP).
 - **Want a globally distributed public endpoint for Google/Microsoft/Zoho only?** → Cloudflare Workers.
 
 > ⚠️ **Workers limitation:** IMAP/SMTP, CalDAV and CardDAV need a Node.js runtime and **do not run on Cloudflare Workers**. Use Docker or CLI for those providers.

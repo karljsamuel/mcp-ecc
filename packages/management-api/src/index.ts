@@ -2,11 +2,13 @@ import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import websocket from '@fastify/websocket';
 import staticFiles from '@fastify/static';
+import { randomUUID } from 'crypto';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import type { StorageAdapter, ProviderName, OAuthConfig } from '@mcp-ecc/core';
 import { OAuthManager } from '@mcp-ecc/core';
 import { McpEccServer } from '@mcp-ecc/mcp-server';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -31,8 +33,15 @@ export class ManagementApi {
     this.oauthManager = new OAuthManager(config.storage);
     this.mcpServer = new McpEccServer(config.storage);
     this.app = Fastify({ logger: true });
+    this.app.setErrorHandler((error: any, request: any, reply: any) => {
+      this.app.log.error({ error, body: request.body }, 'unhandled error');
+      if (!reply.sent) {
+        reply.code(500).send({ error: String(error) });
+      }
+    });
     this.setupPlugins();
     this.setupRoutes();
+    this.setupMcpEndpoint();
   }
 
   private async setupPlugins(): Promise<void> {
@@ -183,6 +192,82 @@ export class ManagementApi {
         return { error: 'Not found' };
       }
       return reply.sendFile('index.html');
+    });
+  }
+
+  private async setupMcpEndpoint(): Promise<void> {
+    // Mount the MCP server over Streamable HTTP on the same port as the
+    // management API, so a single container serves web UI + REST + MCP.
+    // Each session gets its own McpEccServer + transport, because the MCP
+    // Protocol can only connect to one transport at a time. Sessions are
+    // keyed by the Mcp-Session-Id the client returns; the id is generated
+    // during initialize, so we register it in the map after handling.
+    const sessions = new Map<string, { api: McpEccServer; transport: StreamableHTTPServerTransport }>();
+
+    const getOrCreateSession = async (request: any) => {
+      const sessionId = request.headers['mcp-session-id'];
+      if (sessionId && sessions.has(sessionId)) {
+        return sessions.get(sessionId)!;
+      }
+      const api = new McpEccServer(this.storage);
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: () => randomUUID(),
+      });
+      await api.getServer().connect(transport);
+      return { api, transport };
+    };
+
+    const handle = async (request: any, reply: any, session: { api: McpEccServer; transport: StreamableHTTPServerTransport }): Promise<void> => {
+      try {
+        await session.transport.handleRequest(request.raw, reply.raw, request.body);
+        // Register the session once the transport has an id (i.e. after initialize).
+        if (session.transport.sessionId && !sessions.has(session.transport.sessionId)) {
+          sessions.set(session.transport.sessionId, session);
+        }
+      } catch (error) {
+        this.app.log.error({ error }, 'MCP request handler failed');
+        if (!reply.raw.writableEnded) {
+          reply.raw.statusCode = 500;
+          reply.raw.end(JSON.stringify({ jsonrpc: '2.0', error: { code: -32603, message: String(error) }, id: request.body?.id ?? null }));
+        }
+      }
+    };
+
+    // GET: open an SSE stream for server-initiated messages / event stream.
+    this.app.get('/mcp', async (request: any, reply: any) => {
+      const session = await getOrCreateSession(request);
+      reply.hijack();
+      await handle(request, reply, session);
+    });
+
+    // POST: JSON-RPC (initialize, tools/list, tools/call ...).
+    this.app.post('/mcp', async (request: any, reply: any) => {
+      const session = await getOrCreateSession(request);
+      reply.hijack();
+      await handle(request, reply, session);
+    });
+
+    // DELETE: close the transport/session.
+    this.app.delete('/mcp', async (request: any, reply: any) => {
+      const sessionId = request.headers['mcp-session-id'];
+      const session = sessionId ? sessions.get(sessionId) : undefined;
+      reply.hijack();
+      try {
+        if (session) {
+          await session.transport.handleRequest(request.raw, reply.raw, request.body);
+          await session.transport.close();
+          sessions.delete(sessionId);
+        } else {
+          reply.raw.statusCode = 200;
+          reply.raw.end();
+        }
+      } catch (error) {
+        this.app.log.error({ error }, 'MCP DELETE handler failed');
+        if (!reply.raw.writableEnded) {
+          reply.raw.statusCode = 500;
+          reply.raw.end(JSON.stringify({ jsonrpc: '2.0', error: { code: -32603, message: String(error) }, id: null }));
+        }
+      }
     });
   }
 

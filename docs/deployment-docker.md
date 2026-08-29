@@ -1,32 +1,30 @@
-# Docker Deployment
+# Docker Deployment (Single Container)
 
-Run mcp-ecc as one or more containers. This is the recommended self-hosted mode: it provides persistent storage (SQLite on a volume), all providers work (including IMAP/SMTP, CalDAV, CardDAV), and the **Management API + embedded web UI** gives a browser-based way to add accounts and run the server over HTTP.
+Run mcp-ecc as **one container** that serves everything — the web UI, REST/OAuth API, and the MCP endpoint — in a single process on a single port. This is the recommended self-hosted mode: persistent storage (SQLite on a volume), all providers work (including IMAP/SMTP, CalDAV, CardDAV), and a browser UI for adding accounts.
 
 ## Prerequisites
 
 - **Docker** (with Docker Compose v2)
 - A writable `./data` directory on the host (persisted credentials)
 
-## Two entry points
+## Single container — what it runs
 
-The project ships two containers:
+The image entrypoint is the **management API** (`mcp-ecc-api`), which hosts three surfaces on **one port (3001)**:
 
-| Container | Image source | Purpose |
-|-----------|--------------|---------|
-| `mcp-ecc` | `Dockerfile` | The **MCP CLI/server** (stdio default, can also run HTTP) |
-| `mcp-ecc-api` | `Dockerfile.api` | The **Management API** (Fastify REST + WebSocket + embedded admin UI, serves on port 3001) |
+| Surface | Path | Purpose |
+|---------|------|---------|
+| Web UI | `/` | Browser admin UI for adding/managing accounts |
+| REST + OAuth API | `/api/*`, `/oauth/*` | Programmatic account management |
+| **MCP endpoint** | `/mcp` | Model Context Protocol over Streamable HTTP (for remote agent hosts) |
 
-### Ports
-
-- **3000** — MCP server (SSE/HTTP endpoint for `mcp-ecc` container)
-- **3001** — Management API + web UI (`mcp-ecc-api` container)
+All three share the same process, same storage, same port.
 
 ## 1. Configure environment
 
 Create a `.env` file in the repository root. `docker-compose.yml` reads these variables:
 
 ```dotenv
-# Required — used to encrypt stored credentials
+# Required — used to encrypt stored credentials (AES-256-GCM)
 MCP_ENCRYPTION_KEY=your-long-random-secret
 
 # OAuth client credentials (only for providers you use)
@@ -36,12 +34,24 @@ MICROSOFT_CLIENT_ID=...
 MICROSOFT_CLIENT_SECRET=...
 ZOHO_CLIENT_ID=...
 ZOHO_CLIENT_SECRET=...
+
+# Public base URL (used for OAuth redirects)
+BASE_URL=http://localhost:3001
 ```
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `MCP_ENCRYPTION_KEY` | required | AES-256-GCM key for stored credentials |
+| `PORT` | `3001` | Listen port |
+| `HOST` | `0.0.0.0` | Bind address |
+| `BASE_URL` | `http://localhost:3001` | OAuth redirect base |
+| `MCP_STORAGE_FILE` | `/data/mcp-ecc.db` | SQLite path |
+| `MCP_PUBLIC_DIR` | embedded `admin-ui` build | Static UI directory |
 
 ## 2. Build and start
 
 ```bash
-# Build both images
+# Build the image
 docker compose build
 
 # Start in the background
@@ -51,16 +61,31 @@ docker compose up -d
 docker compose logs -f
 ```
 
-Both containers share a mounted volume at `./data`, so accounts configured in one are visible to the other.
+Or without Compose:
 
-## 3. Using the Management API + Web UI
+```bash
+docker build -t mcp-ecc .
+docker run -d --name mcp-ecc \
+  -p 3001:3001 \
+  -v $(pwd)/data:/data \
+  -e MCP_ENCRYPTION_KEY=your-long-random-secret \
+  mcp-ecc
+```
 
-Once running:
+## 3. Storage behaviour
 
-- Open **http://localhost:3001** (or the host IP/port) to reach the web UI
-- **Add an account** → select a provider → complete OAuth in the browser; the server stores the tokens (encrypted) and shows status
+The `bin.ts` entrypoint prefers **SQLite** (`better-sqlite3`, persistent on the `/data` volume) and **falls back to in-memory** automatically if the native module is unavailable. The Docker builder installs native build tools so SQLite is the default there.
 
-The Management API also exposes REST endpoints:
+Back up the `./data` directory; without the encryption key the database cannot be read by anyone else.
+
+## 4. Using the web UI
+
+Open **http://localhost:3001**:
+
+1. **Add an Account** → select a provider → complete OAuth in the browser
+2. Tokens are stored encrypted; account status is shown
+
+## 5. REST/OAuth API
 
 | Method | Path | Purpose |
 |--------|------|---------|
@@ -72,48 +97,32 @@ The Management API also exposes REST endpoints:
 | `GET` | `/oauth/start` | Begin OAuth flow (browser) |
 | `GET` | `/oauth/callback` | OAuth redirect target |
 | `POST` | `/oauth/device-poll` | Poll device-code flow |
-| `WS` | `/ws` | Real-time sync status updates |
+| `WS` | `/ws` | Real-time sync status |
 
-## 4. Running the MCP server alone (HTTP/SSE)
+## 6. Connecting an MCP agent host
 
-If you only need the MCP server exposed over HTTP (e.g. for a remote agent host), launch the `mcp-ecc` container with the SSE entrypoint:
+Point a remote MCP client at the Streamable HTTP endpoint:
 
-```bash
-# Run the MCP server container on SSE
-docker run -d --name mcp-ecc \
-  -p 3000:3000 \
-  -v $(pwd)/data:/data \
-  -e MCP_ENCRYPTION_KEY=your-long-random-secret \
-  mcp-ecc start --sse --port 3000
+```
+MCP endpoint URL: http://<host>:3001/mcp
+transport:        streamable-http
 ```
 
-You can also change the `command` in `docker-compose.yml`:
+The client performs the standard MCP handshake (`initialize` → `notifications/initialized` → `tools/list`), exchanging the `Mcp-Session-Id` header. All `mail.*`, `calendar.*`, `contacts.*` and `accounts.*` tools are exposed.
 
-```yaml
-services:
-  mcp-ecc:
-    command: ["start", "--sse", "--port", "3000"]
-```
-
-## 5. Point an agent host at the HTTP endpoint
-
-Some MCP hosts support HTTP/SSE transports. Configure the server URL as `http://<host>:3000/sse` (SSE) and POST messages to `/messages`. Most desktop agent hosts prefer **stdio** — in that case attach the CLI container's stdio as described in the [CLI docs](deployment-cli.md).
-
-## Storage
-
-- Credentials and account config are stored in `./data/mcp-ecc.db` (SQLite), encrypted with AES-256-GCM using `MCP_ENCRYPTION_KEY`.
-- Back up the `./data` directory; without the encryption key the database cannot be decrypted by anyone else.
+For local desktop agents (Claude, Cursor) that prefer **stdio**, use the CLI as described in the [CLI docs](deployment-cli.md) instead.
 
 ## Security notes
 
 - **Never** commit the `.env` file (it is gitignored).
-- Put the Management API behind TLS (reverse proxy / HTTPS) when exposed beyond localhost.
-- Restrict access to ports 3000/3001 if the host is internet-facing.
+- Put the endpoint behind TLS (reverse proxy / HTTPS) when exposed beyond localhost.
+- Restrict access to port 3001 if the host is internet-facing.
 
 ## Troubleshooting
 
 | Symptom | Fix |
 |---------|-----|
-| `better-sqlite3` fails to build during `docker build` | Install `python3`, `make`, `g++` in the builder stage (the provided `Dockerfile` already does this) |
+| `better-sqlite3` fails to build during `docker build` | The provided `Dockerfile` installs `python3`, `make`, `g++` in the builder stage |
 | Web UI shows "account connected" but server can't read mail | Confirm the provider's OAuth scopes include mail/calendar/contacts; see the provider docs |
-| Accounts not shared between containers | Ensure both mount the same `./data` volume and run on the same host |
+| MCP client gets "Already connected to a transport" | Each HTTP session must use its own `Mcp-Session-Id`; ensure your client persists it |
+| `GET /mcp` not streaming | Streamable HTTP requires the `Accept: application/json, text/event-stream` header |
