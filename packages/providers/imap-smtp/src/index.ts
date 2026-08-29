@@ -1,4 +1,4 @@
-import imaps from 'imap-simple';
+import { ImapFlow } from 'imapflow';
 import { simpleParser } from 'mailparser';
 import nodemailer from 'nodemailer';
 import type {
@@ -25,22 +25,21 @@ import type {
 } from '@mcp-ecc/core';
 
 export class ImapSmtpProvider implements IMailProvider, ICalendarProvider, IContactsProvider {
-  private imapConfig: imaps.ImapSimpleOptions;
+  private imapConfig: ConstructorParameters<typeof ImapFlow>[0];
   private smtpConfig: nodemailer.TransportOptions;
 
   constructor(private accountId: string, private credentials: AccountCredentials) {
     const config = credentials.config || {};
 
     this.imapConfig = {
-      imap: {
+      host: config.imapHost || 'imap.gmail.com',
+      port: config.imapPort || 993,
+      secure: config.imapTls !== false,
+      auth: {
         user: accountId,
-        password: credentials.appPassword || '',
-        host: config.imapHost || 'imap.gmail.com',
-        port: config.imapPort || 993,
-        tls: config.imapTls !== false,
-        tlsOptions: { rejectUnauthorized: false },
-        authTimeout: 10000,
+        pass: credentials.appPassword || '',
       },
+      logger: false,
     };
 
     this.smtpConfig = {
@@ -55,127 +54,80 @@ export class ImapSmtpProvider implements IMailProvider, ICalendarProvider, ICont
     } as nodemailer.TransportOptions;
   }
 
-  private async connect(): Promise<imaps.ImapSimple> {
-    return imaps.connect(this.imapConfig);
+  private async connect(): Promise<ImapFlow> {
+    const client = new ImapFlow(this.imapConfig);
+    await client.connect();
+    return client;
   }
 
   // --- IMailProvider ---
 
   async listFolders(): Promise<MailFolder[]> {
-    const connection = await this.connect();
+    const client = await this.connect();
     try {
-      const boxes = await connection.getBoxes();
-      return Object.entries(boxes).map(([name, box]) => ({
-        id: name,
-        name,
-        type: this.mapFolderType(name),
-        unreadCount: (box as any).unseen || 0,
-        totalCount: (box as any).messages?.total || 0,
+      const boxes = await client.list();
+      return boxes.map(box => ({
+        id: box.path,
+        name: box.name || box.path,
+        type: this.mapFolderType(box.name || box.path),
+        unreadCount: 0,
+        totalCount: 0,
         createdAt: 0,
         updatedAt: 0,
       }));
     } finally {
-      connection.end();
+      await client.logout();
     }
   }
 
   async listMessages(folderId: string, options: ListMessagesOptions = {}): Promise<EmailMessage[]> {
-    const connection = await this.connect();
+    const client = await this.connect();
     try {
-      await connection.openBox(folderId);
+      await client.mailboxOpen(folderId);
 
-      let searchCriteria: any[] = ['ALL'];
+      const search: any = { all: true };
       if (options.query) {
-        searchCriteria = [['TEXT', options.query]];
+        search.text = options.query;
+      }
+      if (options.unreadOnly) {
+        search.seen = false;
       }
 
-      const fetchOptions = {
-        bodies: ['HEADER.FIELDS (FROM TO CC BCC SUBJECT DATE MESSAGE-ID REFERENCES IN-REPLY-TO)', 'TEXT', ''],
-        struct: true,
-      };
-
-      const messages = await connection.search(searchCriteria, fetchOptions);
-      messages.sort((a, b) => b.attributes.uid - a.attributes.uid);
-      const sliced = messages.slice(0, options.limit || 50);
+      const messages = await client.search(search, { uid: true });
+      const list = messages || [];
+      const sliced = list.slice(-(options.limit || 50)); // newest last, take tail
 
       const emailMessages: EmailMessage[] = [];
-
-      for (const msg of sliced) {
-        const headerPart = msg.parts.find(p => p.which === 'HEADER.FIELDS (FROM TO CC BCC SUBJECT DATE MESSAGE-ID REFERENCES IN-REPLY-TO)');
-        const textPart = msg.parts.find(p => p.which === 'TEXT');
-        const fullPart = msg.parts.find(p => p.which === '');
-        const uid = String(msg.attributes.uid);
-
-        if (headerPart) {
-          const parsed: any = await simpleParser(headerPart.body);
-          
-          emailMessages.push({
-            id: uid,
-            threadId: parsed.references ? parsed.references[0] : undefined,
-            from: parsed.from ? { name: parsed.from.text, address: parsed.from.value[0]?.address } : { address: '' },
-            to: Array.isArray(parsed.to) ? parsed.to.map((t: any) => ({ name: t.name, address: t.address })) : parsed.to ? [{ name: parsed.to.name, address: parsed.to.address }] : [],
-            cc: Array.isArray(parsed.cc) ? parsed.cc.map((t: any) => ({ name: t.name, address: t.address })) : parsed.cc ? [{ name: (parsed.cc as any).name, address: (parsed.cc as any).address }] : [],
-            bcc: [],
-            subject: parsed.subject || '',
-            snippet: textPart?.body?.substring(0, 200) || '',
-            body: textPart?.body || '',
-            htmlBody: fullPart?.body || undefined,
-            date: new Date(parsed.date || Date.now()).getTime(),
-            unread: !msg.attributes.flags?.includes('\\Seen'),
-            starred: msg.attributes.flags?.includes('\\Flagged') || false,
-            labelsOrFolders: [folderId],
-            attachments: parsed.attachments?.map((a: any) => ({
-              filename: a.filename || 'attachment',
-              mimeType: a.contentType,
-              size: a.size,
-              contentId: a.contentId,
-            })),
-          });
+      for (const range of sliced) {
+        try {
+          const fetched = await client.fetchOne(range, { source: true, uid: true });
+          if (!fetched || !fetched.source) continue;
+          const parsed = await simpleParser(fetched.source);
+          emailMessages.push(this.mapParsedMessage(parsed, String(fetched.uid), folderId, fetched.flags));
+        } catch (err) {
+          console.error(`Failed to parse message ${range}:`, err);
         }
       }
 
       return emailMessages;
     } finally {
-      connection.end();
+      await client.logout();
     }
   }
 
   async getMessage(messageId: string): Promise<EmailMessage> {
-    const connection = await this.connect();
+    const client = await this.connect();
     try {
-      await connection.openBox('INBOX'); // Would need to know folder
-      const fetchOptions = { bodies: [''], struct: true };
-      const messages = await connection.search([['UID', messageId]], fetchOptions);
-      
-      if (messages.length === 0) {
+      await client.mailboxOpen('INBOX');
+      const uid = messageId.includes(':') ? messageId.split(':').pop()! : messageId;
+      const fetched = await client.fetchOne(uid, { source: true, uid: true });
+      if (!fetched || !fetched.source) {
         throw new Error(`Message ${messageId} not found`);
       }
-
-      const msg = messages[0];
-      const fullPart = msg.parts.find(p => p.which === '');
-      const parsed: any = fullPart ? await simpleParser(fullPart.body) : { subject: '', from: null, to: [], cc: [], date: new Date() };
-
-      return {
-        id: messageId,
-        from: parsed.from ? { name: parsed.from.text, address: parsed.from.value[0]?.address } : { address: '' },
-        to: Array.isArray(parsed.to) ? parsed.to.map((t: any) => ({ name: t.name, address: t.address })) : parsed.to ? [{ name: parsed.to.name, address: parsed.to.address }] : [],
-        cc: Array.isArray(parsed.cc) ? parsed.cc.map((t: any) => ({ name: t.name, address: t.address })) : parsed.cc ? [{ name: (parsed.cc as any).name, address: (parsed.cc as any).address }] : [],
-        subject: parsed.subject || '',
-        body: parsed.text || '',
-        htmlBody: parsed.html || undefined,
-        date: new Date(parsed.date || Date.now()).getTime(),
-        unread: !msg.attributes.flags?.includes('\\Seen'),
-        starred: msg.attributes.flags?.includes('\\Flagged') || false,
-        labelsOrFolders: ['INBOX'],
-        attachments: parsed.attachments?.map((a: any) => ({
-          filename: a.filename || 'attachment',
-          mimeType: a.contentType,
-          size: a.size,
-          contentId: a.contentId,
-        })),
-      };
+      const parsed = await simpleParser(fetched.source);
+      return this.mapParsedMessage(parsed, String(fetched.uid), 'INBOX', fetched.flags);
     } finally {
-      connection.end();
+      await client.logout();
     }
   }
 
@@ -218,49 +170,48 @@ export class ImapSmtpProvider implements IMailProvider, ICalendarProvider, ICont
   }
 
   async moveMessage(messageId: string, folderId: string): Promise<void> {
-    const connection = await this.connect();
+    const client = await this.connect();
     try {
-      await connection.openBox('INBOX');
-      await connection.moveMessage(messageId, folderId);
+      await client.mailboxOpen('INBOX');
+      await client.messageMove(messageId, folderId, { uid: true });
     } finally {
-      connection.end();
+      await client.logout();
     }
   }
 
   async setFlags(messageId: string, addFlags: string[], removeFlags: string[]): Promise<void> {
-    const connection = await this.connect();
+    const client = await this.connect();
     try {
-      await connection.openBox('INBOX');
-      
-      if (addFlags.includes('\\Seen') || removeFlags.includes('\\Seen')) {
-        if (addFlags.includes('\\Seen')) await (connection as any).addFlags(messageId, '\\Seen');
-        if (removeFlags.includes('\\Seen')) await (connection as any).removeFlags(messageId, '\\Seen');
-      }
-      if (addFlags.includes('\\Flagged') || removeFlags.includes('\\Flagged')) {
-        if (addFlags.includes('\\Flagged')) await (connection as any).addFlags(messageId, '\\Flagged');
-        if (removeFlags.includes('\\Flagged')) await (connection as any).removeFlags(messageId, '\\Flagged');
-      }
-      if (addFlags.includes('\\Deleted') || removeFlags.includes('\\Deleted')) {
-        if (addFlags.includes('\\Deleted')) await (connection as any).addFlags(messageId, '\\Deleted');
-        if (removeFlags.includes('\\Deleted')) await (connection as any).removeFlags(messageId, '\\Deleted');
-      }
+      await client.mailboxOpen('INBOX');
+      const toAdd: string[] = [];
+      const toRemove: string[] = [];
+
+      if (addFlags.includes('\\Seen')) toAdd.push('\\Seen');
+      if (addFlags.includes('\\Flagged')) toAdd.push('\\Flagged');
+      if (addFlags.includes('\\Deleted')) toAdd.push('\\Deleted');
+
+      if (removeFlags.includes('\\Seen')) toRemove.push('\\Seen');
+      if (removeFlags.includes('\\Flagged')) toRemove.push('\\Flagged');
+      if (removeFlags.includes('\\Deleted')) toRemove.push('\\Deleted');
+
+      if (toAdd.length) await client.messageFlagsAdd(messageId, toAdd, { uid: true });
+      if (toRemove.length) await client.messageFlagsRemove(messageId, toRemove, { uid: true });
     } finally {
-      connection.end();
+      await client.logout();
     }
   }
 
   async deleteMessage(messageId: string, permanent = false): Promise<void> {
-    const connection = await this.connect();
+    const client = await this.connect();
     try {
-      await connection.openBox('INBOX');
+      await client.mailboxOpen('INBOX');
       if (permanent) {
-        await (connection as any).addFlags(messageId, '\\Deleted');
-        await (connection as any).deleteMessage(messageId);
+        await client.messageDelete(messageId, { uid: true });
       } else {
-        await connection.moveMessage(messageId, 'Trash');
+        await client.messageMove(messageId, 'Trash', { uid: true });
       }
     } finally {
-      connection.end();
+      await client.logout();
     }
   }
 
@@ -321,6 +272,32 @@ export class ImapSmtpProvider implements IMailProvider, ICalendarProvider, ICont
   }
 
   // --- Helpers ---
+
+  private mapParsedMessage(parsed: any, id: string, folderId: string, flags: any = []): EmailMessage {
+    const flagList = Array.isArray(flags) ? flags : [];
+    return {
+      id,
+      threadId: parsed.references ? parsed.references[0] : undefined,
+      from: parsed.from ? { name: parsed.from.text, address: parsed.from.value[0]?.address } : { address: '' },
+      to: Array.isArray(parsed.to) ? parsed.to.map((t: any) => ({ name: t.name, address: t.address })) : parsed.to ? [{ name: parsed.to.name, address: parsed.to.address }] : [],
+      cc: Array.isArray(parsed.cc) ? parsed.cc.map((t: any) => ({ name: t.name, address: t.address })) : parsed.cc ? [{ name: parsed.cc.name, address: parsed.cc.address }] : [],
+      bcc: [],
+      subject: parsed.subject || '',
+      snippet: (parsed.text || '').substring(0, 200),
+      body: parsed.text || '',
+      htmlBody: parsed.html || undefined,
+      date: new Date(parsed.date || Date.now()).getTime(),
+      unread: !flagList.includes('\\Seen'),
+      starred: flagList.includes('\\Flagged') || false,
+      labelsOrFolders: [folderId],
+      attachments: parsed.attachments?.map((a: any) => ({
+        filename: a.filename || 'attachment',
+        mimeType: a.contentType,
+        size: a.size,
+        contentId: a.contentId,
+      })),
+    };
+  }
 
   private mapFolderType(name: string): MailFolder['type'] {
     const lower = name.toLowerCase();

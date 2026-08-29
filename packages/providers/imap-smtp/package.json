@@ -20,17 +20,16 @@
   },
   "dependencies": {
     "@mcp-ecc/core": "file:../../core",
-    "imap-simple": "^5.1.0",
-    "mailparser": "^3.7.1",
-    "nodemailer": "^6.9.14"
+    "mailparser": "^3.9.17",
+    "nodemailer": "^9.0.6",
+    "imapflow": "^1.7.6"
   },
   "devDependencies": {
-    "typescript": "^5.5.0",
-    "@types/node": "^20.14.0",
-    "@types/imap-simple": "^4.2.8",
+    "typescript": "^5.9.3",
+    "@types/node": "^24.0.0",
     "@types/mailparser": "^3.4.4",
-    "@types/nodemailer": "^6.4.15",
-    "vitest": "^2.0.0",
-    "eslint": "^9.0.0"
+    "@types/nodemailer": "^7.0.0",
+    "vitest": "^4.1.11",
+    "eslint": "^10.9.1"
   }
 }
