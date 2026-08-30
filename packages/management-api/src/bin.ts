@@ -10,6 +10,8 @@ const __dirname = dirname(__filename);
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
 const HOST = process.env.HOST || '0.0.0.0';
+const PUBLIC_URL = process.env.PUBLIC_URL || process.env.BASE_URL || `http://localhost:${PORT}`;
+const SESSION_SECRET = process.env.SESSION_SECRET;
 const ENCRYPTION_KEY = process.env.MCP_ENCRYPTION_KEY;
 
 // Storage: prefer SQLite (persistent) when the native module is available,
@@ -28,6 +30,12 @@ try {
   console.warn(`SQLite storage unavailable, falling back to in-memory: ${e.message}`);
 }
 
+// Bootstrap guidance: if no users exist, the web UI shows the create-admin screen.
+let hasUsers = false;
+try {
+  hasUsers = (await storage.countUsers()) > 0;
+} catch { /* ignore */ }
+
 // Admin UI static dir (embedded build, if present)
 const publicDir = process.env.MCP_PUBLIC_DIR
   || join(__dirname, '..', '..', 'admin-ui', 'dist');
@@ -37,13 +45,18 @@ const api = new ManagementApi({
   port: PORT,
   host: HOST,
   publicDir,
+  publicUrl: PUBLIC_URL,
+  sessionSecret: SESSION_SECRET,
 });
 
 api.start().then(() => {
-  console.log(`mcp-ecc management API + MCP endpoint listening on http://${HOST}:${PORT}`);
-  console.log(`- Web UI:       http://${HOST}:${PORT}`);
-  console.log(`- MCP endpoint: http://${HOST}:${PORT}/mcp`);
-  console.log(`- Storage:      ${storageName}`);
+  console.log(`mcp-ecc management API + MCP endpoint up on http://${HOST}:${PORT}`);
+  console.log(`  - Web UI:        ${PUBLIC_URL}`);
+  console.log(`  - MCP endpoint:  ${PUBLIC_URL}/mcp  (per-user Bearer API key required)`);
+  console.log(`  - Storage:       ${storageName}`);
+  if (!hasUsers) {
+    console.log(`  - First run:     open ${PUBLIC_URL} to create the admin account`);
+  }
 }).catch((error) => {
   console.error('Failed to start mcp-ecc API:', error);
   process.exit(1);

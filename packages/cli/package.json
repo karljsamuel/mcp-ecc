@@ -1,11 +1,20 @@
 {
-  "name": "@mcp-ecc/cli",
-  "version": "0.1.0",
-  "description": "CLI for mcp-ecc",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "name": "@karljsamuel/mcp-ecc",
+  "version": "0.3.0",
+  "mcpName": "io.github.karljsamuel/mcp-ecc",
+  "description": "MCP server for Email, Calendar & Contacts — Google, Microsoft 365, Zoho, IMAP/SMTP, CalDAV, CardDAV",
+  "main": "dist/bin.js",
+  "types": "dist/bin.d.ts",
   "bin": {
     "mcp-ecc": "./dist/bin.js"
+  },
+  "files": ["dist"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/karljsamuel/mcp-ecc.git"
+  },
+  "engines": {
+    "node": ">=24.0.0"
   },
   "scripts": {
     "build": "tsc",

@@ -1,0 +1,33 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.karljsamuel/mcp-ecc",
+  "description": "MCP server for Email, Calendar & Contacts — Google, Microsoft 365, Zoho, IMAP/SMTP, CalDAV, CardDAV. Run locally or self-host; manages user accounts and per-user MCP API keys.",
+  "repository": {
+    "url": "https://github.com/karljsamuel/mcp-ecc",
+    "source": "github"
+  },
+  "version": "0.3.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "@karljsamuel/mcp-ecc",
+      "version": "0.3.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "command": {
+        "command": "npx",
+        "args": ["-y", "@karljsamuel/mcp-ecc"]
+      },
+      "environmentVariables": [
+        {
+          "name": "MCP_ENCRYPTION_KEY",
+          "description": "Master key used to encrypt stored credentials (AES-256-GCM). Generate with: openssl rand -hex 32",
+          "isRequired": true,
+          "isSecret": true,
+          "format": "string"
+        }
+      ]
+    }
+  ]
+}

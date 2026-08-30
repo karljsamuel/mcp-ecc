@@ -163,9 +163,13 @@ async function handleOAuthFlow(rl: readline.Interface, provider: string, email: 
   // Save account
   await storage.saveAccount({
     id: email,
+    ownerId: process.env.MCP_ADMIN_USER_ID || 'local',
     provider: provider as any,
+    name: email,
+    slug: email.replace(/[^a-z0-9_-]+/gi, '-'),
     email,
     credentials: {
+      oauthClientId: email,
       clientId: clientId.trim(),
       clientSecret: clientSecret.trim(),
       accessToken: result.accessToken,
@@ -177,6 +181,7 @@ async function handleOAuthFlow(rl: readline.Interface, provider: string, email: 
       },
     },
     status: 'active',
+    health: 'unknown',
     createdAt: Date.now(),
     updatedAt: Date.now(),
   });
@@ -214,13 +219,17 @@ async function handleAppPasswordFlow(rl: readline.Interface, provider: string, e
 
   await storage.saveAccount({
     id: email,
+    ownerId: process.env.MCP_ADMIN_USER_ID || 'local',
     provider: provider as any,
+    name: email,
+    slug: email.replace(/[^a-z0-9_-]+/gi, '-'),
     email,
     credentials: {
       appPassword,
       config,
     },
     status: 'active',
+    health: 'unknown',
     createdAt: Date.now(),
     updatedAt: Date.now(),
   });

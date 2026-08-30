@@ -14,17 +14,49 @@ import type {
   Calendar,
   Contact,
   OAuthStateData,
+  OAuthClient,
+  User,
 } from '@mcp-ecc/core';
 import { generateId } from '@mcp-ecc/core';
 
 interface DBAccount {
   id: string;
+  owner_id: string;
   provider: string;
+  name: string;
+  slug: string;
   email: string;
   display_name: string | null;
   credentials_json: string; // encrypted
   status: string;
+  health: string;
   last_sync_at: number | null;
+  created_at: number;
+  updated_at: number;
+}
+
+interface DBOAuthClient {
+  id: string;
+  owner_id: string;
+  provider: string;
+  label: string;
+  client_id: string;
+  client_secret: string; // encrypted
+  scopes_json: string; // JSON
+  tenant_id: string | null;
+  accounts_server: string | null;
+  enabled: number;
+  created_at: number;
+  updated_at: number;
+}
+
+interface DBUser {
+  id: string;
+  username: string;
+  display_name: string;
+  password_hash: string;
+  role: string;
+  mcp_api_key: string; // encrypted
   created_at: number;
   updated_at: number;
 }
@@ -155,18 +187,57 @@ export class SQLiteStorage implements StorageAdapter {
   }
 
   private initSchema(): void {
+    // Users table
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS users (
+        id TEXT PRIMARY KEY,
+        username TEXT NOT NULL UNIQUE,
+        display_name TEXT NOT NULL,
+        password_hash TEXT NOT NULL,
+        role TEXT NOT NULL DEFAULT 'user',
+        mcp_api_key TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )
+    `);
+
+    // OAuth clients table (per-user, multiple per provider)
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS oauth_clients (
+        id TEXT PRIMARY KEY,
+        owner_id TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        label TEXT NOT NULL,
+        client_id TEXT NOT NULL,
+        client_secret TEXT NOT NULL,
+        scopes_json TEXT NOT NULL,
+        tenant_id TEXT,
+        accounts_server TEXT,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE CASCADE
+      )
+    `);
+
     // Accounts table
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS accounts (
         id TEXT PRIMARY KEY,
+        owner_id TEXT NOT NULL,
         provider TEXT NOT NULL,
+        name TEXT NOT NULL,
+        slug TEXT NOT NULL,
         email TEXT NOT NULL,
         display_name TEXT,
         credentials_json TEXT NOT NULL,
         status TEXT DEFAULT 'active',
+        health TEXT DEFAULT 'unknown',
         last_sync_at INTEGER,
         created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
+        updated_at INTEGER NOT NULL,
+        FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE CASCADE,
+        UNIQUE(owner_id, slug)
       )
     `);
 
@@ -314,6 +385,8 @@ export class SQLiteStorage implements StorageAdapter {
       CREATE INDEX IF NOT EXISTS idx_contacts_account ON contacts(account_id);
       CREATE INDEX IF NOT EXISTS idx_events_account_range ON calendar_events(account_id, start_at, end_at);
       CREATE INDEX IF NOT EXISTS idx_calendars_account ON calendars(account_id);
+      CREATE INDEX IF NOT EXISTS idx_accounts_owner ON accounts(owner_id);
+      CREATE INDEX IF NOT EXISTS idx_oauth_clients_owner ON oauth_clients(owner_id);
     `);
   }
 
@@ -346,9 +419,17 @@ export class SQLiteStorage implements StorageAdapter {
     return this.mapAccount(row);
   }
 
-  async listAccounts(): Promise<Account[]> {
-    const rows = this.db.prepare('SELECT * FROM accounts').all() as DBAccount[];
+  async listAccounts(ownerId?: string): Promise<Account[]> {
+    const rows = ownerId
+      ? this.db.prepare('SELECT * FROM accounts WHERE owner_id = ? ORDER BY name').all(ownerId) as DBAccount[]
+      : this.db.prepare('SELECT * FROM accounts ORDER BY name').all() as DBAccount[];
     return rows.map(r => this.mapAccount(r));
+  }
+
+  async getAccountBySlug(slug: string, ownerId: string): Promise<Account | null> {
+    const row = this.db.prepare('SELECT * FROM accounts WHERE slug = ? AND owner_id = ?').get(slug, ownerId) as DBAccount | undefined;
+    if (!row) return null;
+    return this.mapAccount(row);
   }
 
   async saveAccount(account: Account): Promise<void> {
@@ -358,14 +439,14 @@ export class SQLiteStorage implements StorageAdapter {
 
     if (existing) {
       this.db.prepare(`
-        UPDATE accounts SET provider = ?, email = ?, display_name = ?, credentials_json = ?, status = ?, last_sync_at = ?, updated_at = ?
+        UPDATE accounts SET owner_id = ?, provider = ?, name = ?, slug = ?, email = ?, display_name = ?, credentials_json = ?, status = ?, health = ?, last_sync_at = ?, updated_at = ?
         WHERE id = ?
-      `).run(account.provider, account.email, account.displayName || null, credentialsJson, account.status, account.lastSyncAt || null, now, account.id);
+      `).run(account.ownerId, account.provider, account.name, account.slug, account.email, account.displayName || null, credentialsJson, account.status, account.health, account.lastSyncAt || null, now, account.id);
     } else {
       this.db.prepare(`
-        INSERT INTO accounts (id, provider, email, display_name, credentials_json, status, last_sync_at, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(account.id, account.provider, account.email, account.displayName || null, credentialsJson, account.status, account.lastSyncAt || null, now, now);
+        INSERT INTO accounts (id, owner_id, provider, name, slug, email, display_name, credentials_json, status, health, last_sync_at, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(account.id, account.ownerId, account.provider, account.name, account.slug, account.email, account.displayName || null, credentialsJson, account.status, account.health, account.lastSyncAt || null, now, now);
     }
   }
 
@@ -377,10 +458,14 @@ export class SQLiteStorage implements StorageAdapter {
     const fields: string[] = [];
     const values: unknown[] = [];
 
+    if (updates.ownerId) { fields.push('owner_id = ?'); values.push(updates.ownerId); }
     if (updates.provider) { fields.push('provider = ?'); values.push(updates.provider); }
+    if (updates.name !== undefined) { fields.push('name = ?'); values.push(updates.name); }
+    if (updates.slug !== undefined) { fields.push('slug = ?'); values.push(updates.slug); }
     if (updates.email) { fields.push('email = ?'); values.push(updates.email); }
     if (updates.displayName !== undefined) { fields.push('display_name = ?'); values.push(updates.displayName); }
     if (updates.status) { fields.push('status = ?'); values.push(updates.status); }
+    if (updates.health) { fields.push('health = ?'); values.push(updates.health); }
     if (updates.lastSyncAt !== undefined) { fields.push('last_sync_at = ?'); values.push(updates.lastSyncAt); }
     if (updates.credentials) {
       fields.push('credentials_json = ?');
@@ -395,6 +480,122 @@ export class SQLiteStorage implements StorageAdapter {
 
     this.db.prepare(`UPDATE accounts SET ${fields.join(', ')} WHERE id = ?`).run(...values);
   }
+
+  // OAuth clients
+  async saveOAuthClient(client: OAuthClient): Promise<void> {
+    const now = Date.now();
+    const existing = this.db.prepare('SELECT id FROM oauth_clients WHERE id = ?').get(client.id);
+    const secretJson = this.encrypt(client.clientSecret);
+
+    if (existing) {
+      this.db.prepare(`
+        UPDATE oauth_clients SET owner_id = ?, provider = ?, label = ?, client_id = ?, client_secret = ?, scopes_json = ?, tenant_id = ?, accounts_server = ?, enabled = ?, updated_at = ?
+        WHERE id = ?
+      `).run(client.ownerId, client.provider, client.label, client.clientId, secretJson, JSON.stringify(client.scopes), client.tenantId || null, client.accountsServer || null, client.enabled ? 1 : 0, now, client.id);
+    } else {
+      this.db.prepare(`
+        INSERT INTO oauth_clients (id, owner_id, provider, label, client_id, client_secret, scopes_json, tenant_id, accounts_server, enabled, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(client.id, client.ownerId, client.provider, client.label, client.clientId, secretJson, JSON.stringify(client.scopes), client.tenantId || null, client.accountsServer || null, client.enabled ? 1 : 0, now, now);
+    }
+  }
+
+  async getOAuthClient(id: string): Promise<OAuthClient | null> {
+    const row = this.db.prepare('SELECT * FROM oauth_clients WHERE id = ?').get(id) as DBOAuthClient | undefined;
+    if (!row) return null;
+    return this.mapOAuthClient(row);
+  }
+
+  async listOAuthClients(ownerId: string): Promise<OAuthClient[]> {
+    const rows = this.db.prepare('SELECT * FROM oauth_clients WHERE owner_id = ? ORDER BY provider, label').all(ownerId) as DBOAuthClient[];
+    return rows.map(r => this.mapOAuthClient(r));
+  }
+
+  async deleteOAuthClient(id: string): Promise<void> {
+    this.db.prepare('DELETE FROM oauth_clients WHERE id = ?').run(id);
+  }
+
+  // Users
+  async saveUser(user: User): Promise<void> {
+    const now = Date.now();
+    const existing = this.db.prepare('SELECT id FROM users WHERE id = ?').get(user.id);
+    const apiKeyJson = this.encrypt(user.mcpApiKey);
+
+    if (existing) {
+      this.db.prepare(`
+        UPDATE users SET username = ?, display_name = ?, password_hash = ?, role = ?, mcp_api_key = ?, updated_at = ?
+        WHERE id = ?
+      `).run(user.username, user.displayName, user.passwordHash, user.role, apiKeyJson, now, user.id);
+    } else {
+      this.db.prepare(`
+        INSERT INTO users (id, username, display_name, password_hash, role, mcp_api_key, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(user.id, user.username, user.displayName, user.passwordHash, user.role, apiKeyJson, now, now);
+    }
+  }
+
+  async getUser(id: string): Promise<User | null> {
+    const row = this.db.prepare('SELECT * FROM users WHERE id = ?').get(id) as DBUser | undefined;
+    if (!row) return null;
+    return this.mapUser(row);
+  }
+
+  async getUserByUsername(username: string): Promise<User | null> {
+    const row = this.db.prepare('SELECT * FROM users WHERE username = ?').get(username) as DBUser | undefined;
+    if (!row) return null;
+    return this.mapUser(row);
+  }
+
+  async getUserByApiKey(apiKey: string): Promise<User | null> {
+    const rows = this.db.prepare('SELECT * FROM users').all() as DBUser[];
+    for (const row of rows) {
+      try {
+        if (this.decrypt(row.mcp_api_key) === apiKey) {
+          return this.mapUser(row);
+        }
+      } catch {
+        // skip undecryptable rows
+      }
+    }
+    return null;
+  }
+
+  async listUsers(): Promise<User[]> {
+    const rows = this.db.prepare('SELECT * FROM users ORDER BY username').all() as DBUser[];
+    return rows.map(r => this.mapUser(r));
+  }
+
+  async updateUser(id: string, updates: Partial<User>): Promise<void> {
+    const fields: string[] = [];
+    const values: unknown[] = [];
+
+    if (updates.displayName !== undefined) { fields.push('display_name = ?'); values.push(updates.displayName); }
+    if (updates.passwordHash) { fields.push('password_hash = ?'); values.push(updates.passwordHash); }
+    if (updates.role) { fields.push('role = ?'); values.push(updates.role); }
+    if (updates.mcpApiKey) {
+      fields.push('mcp_api_key = ?');
+      values.push(this.encrypt(updates.mcpApiKey));
+    }
+
+    if (fields.length === 0) return;
+
+    fields.push('updated_at = ?');
+    values.push(Date.now());
+    values.push(id);
+
+    this.db.prepare(`UPDATE users SET ${fields.join(', ')} WHERE id = ?`).run(...values);
+  }
+
+  async deleteUser(id: string): Promise<void> {
+    this.db.prepare('DELETE FROM users WHERE id = ?').run(id);
+  }
+
+  async countUsers(): Promise<number> {
+    const row = this.db.prepare('SELECT COUNT(*) AS c FROM users').get() as { c: number };
+    return row.c;
+  }
+
+  // mapAccount / mapOAuthClient / mapUser
 
   // Credentials
   async getCredentials(accountId: string): Promise<AccountCredentials | null> {
@@ -727,12 +928,46 @@ export class SQLiteStorage implements StorageAdapter {
   private mapAccount(row: DBAccount): Account {
     return {
       id: row.id,
+      ownerId: row.owner_id,
       provider: row.provider as Account['provider'],
+      name: row.name,
+      slug: row.slug,
       email: row.email,
       displayName: row.display_name || undefined,
       credentials: JSON.parse(this.decrypt(row.credentials_json)),
       status: row.status as Account['status'],
+      health: (row.health as Account['health']) || 'unknown',
       lastSyncAt: row.last_sync_at || undefined,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  private mapOAuthClient(row: DBOAuthClient): OAuthClient {
+    return {
+      id: row.id,
+      ownerId: row.owner_id,
+      provider: row.provider as OAuthClient['provider'],
+      label: row.label,
+      clientId: row.client_id,
+      clientSecret: this.decrypt(row.client_secret),
+      scopes: JSON.parse(row.scopes_json),
+      tenantId: row.tenant_id || undefined,
+      accountsServer: row.accounts_server || undefined,
+      enabled: row.enabled === 1,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  private mapUser(row: DBUser): User {
+    return {
+      id: row.id,
+      username: row.username,
+      displayName: row.display_name,
+      passwordHash: row.password_hash,
+      role: row.role as User['role'],
+      mcpApiKey: this.decrypt(row.mcp_api_key),
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };

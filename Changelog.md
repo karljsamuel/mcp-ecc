@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-08-30
+
+### Added
+- **Multi-user authentication** — `users` table (admin + user roles), first-run admin bootstrap, session-cookie auth for the web UI + REST API, scrypt password hashing.
+- **Per-user MCP API keys** — each user has a unique key; the `/mcp` endpoint requires `Authorization: Bearer <key>` and scopes /mcp to that user's accounts only.
+- **Per-account OAuth clients** — OAuth client IDs/secrets are stored per account (multiple per provider: personal, org-A, org-B), encrypted at rest. No OAuth credentials in `.env`.
+- **Account identity** — each account has a human `name` (free text) and a URL-safe unique `slug` ([a-z0-9], `-`/`_`) used as the stable MCP resource key (`mcp-ecc://{slug}/…`).
+- **Admin user management** — admin can create/delete users and reset passwords; each user self-manages their own email/calendar/contact accounts.
+- **React + Vite + Tailwind admin UI** served by the Fastify API (fixes the previous 404): sidebar with Accounts / Users (admin) / Settings; account card grid with auth key (green/red) + health badges, edit + detail modal; users page; settings with MCP API key display + rotation.
+- **Docker Hub publishing** — images pushed to both `ghcr.io/karljsamuel/mcp-ecc` and `karljsamuel/mcp-ecc`, multi-arch (amd64+arm64), with a `:beta` tag on beta releases and `:latest` on main.
+- **npm + MCP Registry readiness** — scoped package `@karljsamuel/mcp-ecc` with `mcpName` (`io.github.karljsamuel/mcp-ecc`), `server.json`, `llms.txt`, `SKILL.md`, and a manual `npm-publish` workflow.
+- **Documentation** — `docs/auth-users.md`, `docs/accounts-identity.md`; per-provider docs updated for per-account OAuth clients and OAuth-only usage for Microsoft 365.
+- **Toolchain** — turbo v2 (tasks schema), Node 24 LTS, `npm audit` clean (0 vulnerabilities).
+
+### Changed
+- `.env` reduced to server-level settings only: `MCP_ENCRYPTION_KEY`, `PUBLIC_URL`, `HOST`, `HOST_PORT`, `SESSION_SECRET`.
+- Single-container Docker deployment (web UI + REST + MCP on one port 3001).
+- Removed `docker-compose.example.yml` (a single, env-driven `docker-compose.yml` remains).
+- MCP resource URIs now use account slugs instead of raw ids.
+
+### Notes
+- Microsoft 365: app passwords / SMTP basic auth are being retired — use OAuth (Microsoft Graph) only.
+- CalDAV / CardDAV adapters remain scaffolded stubs.
+- Cloudflare Workers still supports only HTTP-API providers (no IMAP/CardDAV).
+
 ## [0.2.0] - 2026-08-28
 
 ### Added

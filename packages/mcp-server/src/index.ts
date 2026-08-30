@@ -24,12 +24,14 @@ interface ProviderInstances {
 export class McpEccServer {
   private server: Server;
   private storage: StorageAdapter;
+  private ownerId: string | null;
   private providerCache = new Map<string, ProviderInstances>();
 
-  constructor(storage: StorageAdapter) {
+  constructor(storage: StorageAdapter, ownerId?: string | null) {
     this.storage = storage;
+    this.ownerId = ownerId || null;
     this.server = new Server(
-      { name: 'mcp-ecc', version: '0.1.0' },
+      { name: 'mcp-ecc', version: '0.3.0' },
       { capabilities: { tools: {}, resources: {}, prompts: {} } }
     );
     this.setupHandlers();
@@ -39,15 +41,25 @@ export class McpEccServer {
     return this.server;
   }
 
+  private async assertOwns(account: any): Promise<void> {
+    if (this.ownerId && account.ownerId && account.ownerId !== this.ownerId) {
+      throw new Error(`Account not found: ${account.id}`);
+    }
+  }
+
+  private async getAccountOwned(accountId: string): Promise<any> {
+    const account = await this.storage.getAccount(accountId);
+    if (!account) throw new Error(`Account not found: ${accountId}`);
+    await this.assertOwns(account);
+    return account;
+  }
+
   private async getOrCreateProviders(accountId: string): Promise<ProviderInstances> {
     if (this.providerCache.has(accountId)) {
       return this.providerCache.get(accountId)!;
     }
 
-    const account = await this.storage.getAccount(accountId);
-    if (!account) {
-      throw new Error(`Account not found: ${accountId}`);
-    }
+    const account = await this.getAccountOwned(accountId);
 
     let mailProvider: any;
     let calendarProvider: any;
@@ -97,7 +109,7 @@ export class McpEccServer {
   private setupHandlers(): void {
     // List resources
     this.server.setRequestHandler(ListResourcesRequestSchema, async () => {
-      const accounts = await this.storage.listAccounts();
+      const accounts = await this.storage.listAccounts(this.ownerId || undefined);
       const resources = [];
 
       for (const account of accounts) {
@@ -106,40 +118,40 @@ export class McpEccServer {
         // Today's agenda resource
         if (account.provider !== 'imap' && account.provider !== 'smtp') {
           resources.push({
-            uri: `mcp-ecc://${account.id}/today-agenda`,
-            name: `Today's agenda for ${account.email}`,
+            uri: `mcp-ecc://${account.slug}/today-agenda`,
+            name: `Today's agenda for ${account.name}`,
             mimeType: 'text/markdown',
-            description: `Consolidated daily calendar view and unread messages count for ${account.email}`,
+            description: `Consolidated daily calendar view and unread messages count for ${account.name}`,
           });
         }
 
         // Mail folders
         if (account.provider !== 'caldav' && account.provider !== 'carddav') {
           resources.push({
-            uri: `mcp-ecc://${account.id}/mail/folders`,
-            name: `Mail folders for ${account.email}`,
+            uri: `mcp-ecc://${account.slug}/mail/folders`,
+            name: `Mail folders for ${account.name}`,
             mimeType: 'application/json',
-            description: `List of mail folders for ${account.email}`,
+            description: `List of mail folders for ${account.name}`,
           });
         }
 
         // Calendars
         if (account.provider !== 'imap' && account.provider !== 'smtp' && account.provider !== 'carddav') {
           resources.push({
-            uri: `mcp-ecc://${account.id}/calendars`,
-            name: `Calendars for ${account.email}`,
+            uri: `mcp-ecc://${account.slug}/calendars`,
+            name: `Calendars for ${account.name}`,
             mimeType: 'application/json',
-            description: `List of calendars for ${account.email}`,
+            description: `List of calendars for ${account.name}`,
           });
         }
 
         // Contacts
         if (account.provider !== 'imap' && account.provider !== 'smtp' && account.provider !== 'caldav') {
           resources.push({
-            uri: `mcp-ecc://${account.id}/contacts`,
-            name: `Contacts for ${account.email}`,
+            uri: `mcp-ecc://${account.slug}/contacts`,
+            name: `Contacts for ${account.name}`,
             mimeType: 'application/json',
-            description: `Contact list for ${account.email}`,
+            description: `Contact list for ${account.name}`,
           });
         }
       }
@@ -155,8 +167,17 @@ export class McpEccServer {
         throw new Error(`Invalid resource URI: ${uri}`);
       }
 
-      const [, accountId, resourcePath] = match;
-      const providers = await this.getOrCreateProviders(accountId);
+      const [, slug, resourcePath] = match;
+      let account;
+      if (this.ownerId) {
+        account = await this.storage.getAccountBySlug(slug, this.ownerId);
+      } else {
+        // No owner context: resolve slug across all accounts (first match).
+        const all = await this.storage.listAccounts();
+        account = all.find(a => a.slug === slug);
+      }
+      if (!account) throw new Error(`Account not found: ${slug}`);
+      const providers = await this.getOrCreateProviders(account.id);
 
       if (resourcePath === 'today-agenda') {
         if (!providers.calendar || !providers.mail) {
@@ -173,7 +194,7 @@ export class McpEccServer {
           providers.mail.listMessages('INBOX', { limit: 10 }).catch(() => []),
         ]);
 
-        let markdown = `# Agenda and Overview for ${accountId}\n\n`;
+        let markdown = `# Agenda and Overview for ${account.name}\n\n`;
         markdown += `## Today's Events (${new Date().toDateString()})\n`;
         
         if (events.length === 0) {
@@ -488,21 +509,21 @@ export class McpEccServer {
 
         // Account tools
         if (name === 'accounts.list') {
-          const accounts = await this.storage.listAccounts();
-          result = { accounts: accounts.map(a => ({ id: a.id, provider: a.provider, email: a.email, status: a.status })) };
+          const accounts = await this.storage.listAccounts(this.ownerId || undefined);
+          result = { accounts: accounts.map(a => ({ id: a.id, slug: a.slug, provider: a.provider, name: a.name, email: a.email, status: a.status, health: a.health })) };
         }
         else if (name === 'accounts.get') {
-          const account = await this.storage.getAccount(args_.accountId);
-          if (!account) throw new Error('Account not found');
-          result = { account: { id: account.id, provider: account.provider, email: account.email, displayName: account.displayName, status: account.status } };
+          const account = await this.getAccountOwned(args_.accountId);
+          result = { account: { id: account.id, slug: account.slug, provider: account.provider, name: account.name, email: account.email, displayName: account.displayName, status: account.status, health: account.health } };
         }
         else if (name === 'accounts.add') {
-          // This would start OAuth flow - simplified for now
+          // This would start OAuth flow - handled via management UI / CLI
           result = { message: 'Use CLI or management UI to add accounts' };
         }
         else if (name === 'accounts.remove') {
-          await this.storage.deleteAccount(args_.accountId);
-          this.providerCache.delete(args_.accountId);
+          const account = await this.getAccountOwned(args_.accountId);
+          await this.storage.deleteAccount(account.id);
+          this.providerCache.delete(account.id);
           result = { success: true };
         }
         else if (name === 'accounts.sync') {

@@ -1,6 +1,6 @@
 {
   "name": "@mcp-ecc/workers-entry",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "description": "Cloudflare Workers entry point for mcp-ecc",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -37,5 +37,11 @@
     "wrangler": "^4.127.1",
     "vitest": "^4.1.11",
     "eslint": "^10.9.1"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=24.0.0"
   }
 }

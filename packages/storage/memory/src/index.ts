@@ -10,11 +10,15 @@ import type {
   Calendar,
   Contact,
   OAuthStateData,
+  OAuthClient,
+  User,
 } from '@mcp-ecc/core';
 
 export class MemoryStorage implements StorageAdapter {
   private accounts = new Map<string, Account>();
   private credentials = new Map<string, AccountCredentials>();
+  private oauthClients = new Map<string, OAuthClient>();
+  private users = new Map<string, User>();
   private syncStates = new Map<string, SyncState>();
   private settings: Settings = { updatedAt: 0 };
   private oauthStates = new Map<string, OAuthStateData>();
@@ -29,12 +33,21 @@ export class MemoryStorage implements StorageAdapter {
     return this.accounts.get(id) || null;
   }
 
-  async listAccounts(): Promise<Account[]> {
-    return Array.from(this.accounts.values());
+  async listAccounts(ownerId?: string): Promise<Account[]> {
+    const all = Array.from(this.accounts.values());
+    if (ownerId) return all.filter(a => a.ownerId === ownerId);
+    return all;
+  }
+
+  async getAccountBySlug(slug: string, ownerId: string): Promise<Account | null> {
+    for (const acc of this.accounts.values()) {
+      if (acc.slug === slug && acc.ownerId === ownerId) return { ...acc };
+    }
+    return null;
   }
 
   async saveAccount(account: Account): Promise<void> {
-    this.accounts.set(account.id, { ...account });
+    this.accounts.set(account.id, { ...account, credentials: { ...account.credentials } });
   }
 
   async deleteAccount(id: string): Promise<void> {
@@ -51,7 +64,67 @@ export class MemoryStorage implements StorageAdapter {
   async updateAccount(id: string, updates: Partial<Account>): Promise<void> {
     const existing = this.accounts.get(id);
     if (!existing) throw new Error('Account not found');
-    this.accounts.set(id, { ...existing, ...updates });
+    const merged = { ...existing, ...updates };
+    if (updates.credentials) merged.credentials = { ...existing.credentials, ...updates.credentials };
+    this.accounts.set(id, merged);
+  }
+
+  // OAuth clients
+  async saveOAuthClient(client: OAuthClient): Promise<void> {
+    this.oauthClients.set(client.id, { ...client });
+  }
+
+  async getOAuthClient(id: string): Promise<OAuthClient | null> {
+    return this.oauthClients.get(id) || null;
+  }
+
+  async listOAuthClients(ownerId: string): Promise<OAuthClient[]> {
+    return Array.from(this.oauthClients.values()).filter(c => c.ownerId === ownerId);
+  }
+
+  async deleteOAuthClient(id: string): Promise<void> {
+    this.oauthClients.delete(id);
+  }
+
+  // Users
+  async saveUser(user: User): Promise<void> {
+    this.users.set(user.id, { ...user });
+  }
+
+  async getUser(id: string): Promise<User | null> {
+    return this.users.get(id) || null;
+  }
+
+  async getUserByUsername(username: string): Promise<User | null> {
+    for (const u of this.users.values()) {
+      if (u.username === username) return { ...u };
+    }
+    return null;
+  }
+
+  async getUserByApiKey(apiKey: string): Promise<User | null> {
+    for (const u of this.users.values()) {
+      if (u.mcpApiKey === apiKey) return { ...u };
+    }
+    return null;
+  }
+
+  async listUsers(): Promise<User[]> {
+    return Array.from(this.users.values()).map(u => ({ ...u }));
+  }
+
+  async updateUser(id: string, updates: Partial<User>): Promise<void> {
+    const existing = this.users.get(id);
+    if (!existing) throw new Error('User not found');
+    this.users.set(id, { ...existing, ...updates });
+  }
+
+  async deleteUser(id: string): Promise<void> {
+    this.users.delete(id);
+  }
+
+  async countUsers(): Promise<number> {
+    return this.users.size;
   }
 
   // Credentials
@@ -190,6 +263,8 @@ export class MemoryStorage implements StorageAdapter {
   clear(): void {
     this.accounts.clear();
     this.credentials.clear();
+    this.oauthClients.clear();
+    this.users.clear();
     this.syncStates.clear();
     this.settings = { updatedAt: 0 };
     this.oauthStates.clear();

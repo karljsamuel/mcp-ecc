@@ -12,6 +12,19 @@ import { AuthError, ProviderError } from './types.js';
 export class OAuthManager {
   constructor(private storage: StorageAdapter) {}
 
+  // Convert a stored per-account OAuthClient into an OAuthConfig for flows.
+  static clientToConfig(client: { provider: ProviderName; clientId: string; clientSecret: string; scopes: string[]; tenantId?: string; accountsServer?: string }, redirectUri: string): OAuthConfig {
+    return {
+      provider: client.provider,
+      clientId: client.clientId,
+      clientSecret: client.clientSecret,
+      redirectUri,
+      scopes: client.scopes,
+      tenantId: client.tenantId,
+      accountsServer: client.accountsServer,
+    };
+  }
+
   async startFlow(
     provider: ProviderName,
     flowType: OAuthFlowType,

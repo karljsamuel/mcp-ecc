@@ -1,22 +1,53 @@
+# mcp-ecc — single-container deployment.
+# One container runs the Management API (Fastify) which serves:
+#   - Web UI        http://localhost:{HOST_PORT}
+#   - REST/OAuth    /api/*, /oauth/*
+#   - MCP endpoint  /mcp  (Streamable HTTP, per-user Bearer API key)
+#
+# Usage:
+#   cp .env.example .env   # fill in MCP_ENCRYPTION_KEY, PUBLIC_URL, etc
+#   docker compose up -d
+#
+# Image sources (pick one):
+#   Docker Hub: karljsamuel/mcp-ecc   (default)
+#   GHCR:       ghcr.io/karljsamuel/mcp-ecc
+
 services:
   mcp-ecc:
-    image: ghcr.io/karljsamuel/mcp-ecc:latest
-    build:
-      context: .
-      dockerfile: Dockerfile
+    # Prebuilt image from Docker Hub (pushed by the publish workflow on tags).
+    # Use :beta for the latest beta, or a pinned tag e.g. karljsamuel/mcp-ecc:0.3.0.
+    image: ${MCP_ECC_IMAGE:-karljsamuel/mcp-ecc:latest}
+    # To build locally instead of pulling, uncomment:
+    # build:
+    #   context: .
+    #   dockerfile: Dockerfile
     container_name: mcp-ecc
     restart: unless-stopped
     ports:
-      - "3001:3001"
+      # HOST_PORT (left side) maps to the container's internal PORT (always 3001).
+      - "${HOST_PORT:-3001}:3001"
     environment:
-      - MCP_ENCRYPTION_KEY=${MCP_ENCRYPTION_KEY}
-      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
-      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
-      - MICROSOFT_CLIENT_ID=${MICROSOFT_CLIENT_ID}
-      - MICROSOFT_CLIENT_SECRET=${MICROSOFT_CLIENT_SECRET}
-      - ZOHO_CLIENT_ID=${ZOHO_CLIENT_ID}
-      - ZOHO_CLIENT_SECRET=${ZOHO_CLIENT_SECRET}
-      - BASE_URL=${BASE_URL:-http://localhost:3001}
-      - PORT=3001
+      # Required — used to encrypt stored credentials (AES-256-GCM)
+      MCP_ENCRYPTION_KEY: ${MCP_ENCRYPTION_KEY}
+      # Public base URL (OAuth redirects / reverse proxy / Tailscale / Cloudflare Tunnel)
+      PUBLIC_URL: ${PUBLIC_URL:-http://localhost:3001}
+      # Bind address. 0.0.0.0 = all interfaces (default); use 127.0.0.1 when a
+      # reverse proxy or tunnel terminates TLS in front of this container.
+      HOST: ${HOST:-0.0.0.0}
+      # Session-cookie signing secret (fallback: derived from MCP_ENCRYPTION_KEY)
+      SESSION_SECRET: ${SESSION_SECRET:-}
+      # Internal container port (do not change)
+      PORT: "3001"
+      # Persisted SQLite path inside the container
+      MCP_STORAGE_FILE: /data/mcp-ecc.db
+      # Static UI directory (defaults to embedded admin-ui build)
+      # MCP_PUBLIC_DIR: /app/packages/admin-ui/dist
     volumes:
+      # Persist encrypted credentials + SQLite data on the host
       - ./data:/data
+    # Resource safety (adjust as needed)
+    # deploy:
+    #   resources:
+    #     limits:
+    #       memory: 512M
+    #       cpus: "1.0"

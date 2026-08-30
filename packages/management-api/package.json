@@ -1,6 +1,6 @@
 {
   "name": "@mcp-ecc/management-api",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "description": "Management API for mcp-ecc",
   "type": "module",
   "main": "dist/index.js",
@@ -33,6 +33,7 @@
     "@fastify/websocket": "^11.3.0",
     "@fastify/cors": "^11.3.0",
     "@fastify/static": "^10.1.3",
+    "@fastify/cookie": "^11.1.2",
     "dotenv": "^17.4.2",
     "zod": "^4.5.2"
   },
@@ -41,5 +42,11 @@
     "@types/node": "^24.0.0",
     "vitest": "^4.1.11",
     "eslint": "^10.9.1"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=24.0.0"
   }
 }

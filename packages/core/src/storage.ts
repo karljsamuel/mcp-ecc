@@ -14,15 +14,34 @@ import type {
   Contact,
   OAuthFlowType,
   OAuthStateData,
+  OAuthClient,
+  User,
 } from './types.js';
 
 export interface StorageAdapter {
   // Account management
   getAccount(id: string): Promise<Account | null>;
-  listAccounts(): Promise<Account[]>;
+  listAccounts(ownerId?: string): Promise<Account[]>;
   saveAccount(account: Account): Promise<void>;
   deleteAccount(id: string): Promise<void>;
   updateAccount(id: string, updates: Partial<Account>): Promise<void>;
+  getAccountBySlug(slug: string, ownerId: string): Promise<Account | null>;
+
+  // OAuth clients (per-user, multiple per provider)
+  saveOAuthClient(client: OAuthClient): Promise<void>;
+  getOAuthClient(id: string): Promise<OAuthClient | null>;
+  listOAuthClients(ownerId: string): Promise<OAuthClient[]>;
+  deleteOAuthClient(id: string): Promise<void>;
+
+  // Users
+  saveUser(user: User): Promise<void>;
+  getUser(id: string): Promise<User | null>;
+  getUserByUsername(username: string): Promise<User | null>;
+  getUserByApiKey(apiKey: string): Promise<User | null>;
+  listUsers(): Promise<User[]>;
+  updateUser(id: string, updates: Partial<User>): Promise<void>;
+  deleteUser(id: string): Promise<void>;
+  countUsers(): Promise<number>;
 
   // Credentials (encrypted)
   getCredentials(accountId: string): Promise<AccountCredentials | null>;

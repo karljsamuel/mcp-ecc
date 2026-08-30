@@ -22,6 +22,8 @@ export interface AccountCredentials {
   accessToken?: string;
   refreshToken?: string;
   expiryDate?: number; // Unix ms
+  // Reference to the stored OAuth client used for this account
+  oauthClientId?: string;
   // App password for IMAP/SMTP
   appPassword?: string;
   // Provider-specific config
@@ -32,12 +34,46 @@ export interface AccountCredentials {
 
 export interface Account {
   id: string; // UUID
+  ownerId: string; // owning user id
   provider: ProviderName;
+  name: string; // human-readable, may contain spaces/special chars
+  slug: string; // URL-safe unique key ([a-z0-9-_]), used in MCP resource URIs
   email: string;
   displayName?: string;
   credentials: AccountCredentials;
   status: 'active' | 'error' | 'disabled';
+  health: 'unknown' | 'healthy' | 'unhealthy';
   lastSyncAt?: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+// An OAuth application / client the user registers with a provider.
+// Multiple clients per provider are allowed (personal, org-A, org-B).
+// client_secret is encrypted at rest. Stored per-account (NOT in .env).
+export interface OAuthClient {
+  id: string; // UUID
+  ownerId: string; // owning user id
+  provider: ProviderName;
+  label: string; // e.g. "Personal", "KCET Org"
+  clientId: string;
+  clientSecret: string; // encrypted
+  scopes: string[];
+  tenantId?: string; // Microsoft
+  accountsServer?: string; // Zoho region
+  enabled: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
+// Application user. Users self-manage their own accounts. Admin manages users.
+export interface User {
+  id: string; // UUID
+  username: string; // unique, immutable
+  displayName: string;
+  passwordHash: string; // argon2
+  role: 'admin' | 'user';
+  mcpApiKey: string; // encrypted; scopes /mcp to this user's accounts
   createdAt: number;
   updatedAt: number;
 }

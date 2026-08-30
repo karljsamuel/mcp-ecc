@@ -88,3 +88,22 @@ export function truncate(str: string, maxLength: number): string {
   if (str.length <= maxLength) return str;
   return str.slice(0, maxLength - 3) + '...';
 }
+
+// Convert a human account name into a URL-safe slug.
+// Allowed chars: a-z, 0-9, '-', '_'. Spaces -> '-'.
+export function slugify(name: string, fallback = 'account'): string {
+  let slug = name
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9_-]+/g, '-')   // spaces/special -> '-'
+    .replace(/^-+|-+$/g, '');         // trim leading/trailing '-'
+  if (!slug) slug = fallback;
+  // guarantee uniqueness by appending short hash if provided separately
+  return slug;
+}
+
+export function generateSlug(name: string, suffix?: string): string {
+  const base = slugify(name);
+  if (!suffix) return base;
+  return `${base}-${suffix.slice(0, 8)}`;
+}

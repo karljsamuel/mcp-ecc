@@ -4,6 +4,8 @@ The CalDAV and CardDAV providers connect to calendars and address books over the
 
 > **Node.js only.** These providers require outbound HTTP to your DAV server and persistent sessions; they **do not run on Cloudflare Workers**. Use CLI or Docker mode.
 
+These providers authenticate with a **username and password** stored per account. They do **not** use OAuth clients, so they need no client registration in mcp-ecc.
+
 ## Capabilities
 
 | Provider | Domain | Status |
@@ -22,6 +24,8 @@ Every DAV account needs:
 
 You must enable the server to accept a client (many servers require generating an **app password**; singular DAV users like Radicale often accept the normal password).
 
+All of these values, including the server URL and password, are stored **on the account**, encrypted at rest. The account's `name` (free text) and `slug` (`[a-z0-9-_]`, unique per owner) label it for mcp-ecc — see [Accounts & Identity](accounts-identity.md).
+
 ## 2. Add a CalDAV account
 
 ```bash
@@ -38,8 +42,10 @@ Account config equivalent:
 
 ```json
 {
-  "accountId": "calendar-user@example.com",
   "provider": "caldav",
+  "name": "Team Calendar",
+  "slug": "team-calendar",
+  "email": "calendar-user@example.com",
   "appPassword": "dav-password",
   "config": {
     "caldavUrl": "https://nextcloud.example.com/remote.php/dav/",
@@ -68,8 +74,10 @@ Account config equivalent:
 
 ```json
 {
-  "accountId": "contacts-user@example.com",
   "provider": "carddav",
+  "name": "Work Contacts",
+  "slug": "work-contacts",
+  "email": "contacts-user@example.com",
   "appPassword": "dav-password",
   "config": {
     "carddavUrl": "https://nextcloud.example.com/remote.php/dav/",

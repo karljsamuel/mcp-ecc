@@ -2,11 +2,12 @@ import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import websocket from '@fastify/websocket';
 import staticFiles from '@fastify/static';
+import cookies from '@fastify/cookie';
 import { randomUUID } from 'crypto';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import type { StorageAdapter, ProviderName, OAuthConfig } from '@mcp-ecc/core';
-import { OAuthManager } from '@mcp-ecc/core';
+import type { StorageAdapter, ProviderName, OAuthClient, User } from '@mcp-ecc/core';
+import { OAuthManager, AuthService, generateSlug } from '@mcp-ecc/core';
 import { McpEccServer } from '@mcp-ecc/mcp-server';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 
@@ -18,25 +19,40 @@ export interface ManagementApiConfig {
   port: number;
   host: string;
   publicDir: string;
+  publicUrl?: string;
+  sessionSecret?: string;
+}
+
+const SESSION_COOKIE = 'mcp_ecc_session';
+const AUTH_PROVIDERS: ProviderName[] = ['google', 'microsoft', 'zoho'];
+
+// Strip secret fields before returning an entity to clients.
+function publicUser(u: User) {
+  return { id: u.id, username: u.username, displayName: u.displayName, role: u.role };
+}
+function publicClient(c: OAuthClient) {
+  return { id: c.id, provider: c.provider, label: c.label, clientId: c.clientId, scopes: c.scopes, tenantId: c.tenantId, accountsServer: c.accountsServer, enabled: c.enabled };
 }
 
 export class ManagementApi {
   private app: ReturnType<typeof Fastify>;
   private storage: StorageAdapter;
   private oauthManager: OAuthManager;
-  private mcpServer: McpEccServer;
+  private authService: AuthService;
   private config: ManagementApiConfig;
+  private publicUrl: string;
 
   constructor(config: ManagementApiConfig) {
     this.config = config;
     this.storage = config.storage;
     this.oauthManager = new OAuthManager(config.storage);
-    this.mcpServer = new McpEccServer(config.storage);
+    this.authService = new AuthService(config.storage);
+    this.publicUrl = config.publicUrl || process.env.PUBLIC_URL || `http://localhost:${config.port}`;
     this.app = Fastify({ logger: true });
     this.app.setErrorHandler((error: any, request: any, reply: any) => {
       this.app.log.error({ error, body: request.body }, 'unhandled error');
       if (!reply.sent) {
-        reply.code(500).send({ error: String(error) });
+        reply.code(error?.statusCode || 500).send({ error: error?.message || String(error) });
       }
     });
     this.setupPlugins();
@@ -44,267 +60,346 @@ export class ManagementApi {
     this.setupMcpEndpoint();
   }
 
-  private async setupPlugins(): Promise<void> {
-    await this.app.register(cors, { origin: true });
-    await this.app.register(websocket);
-    await this.app.register(staticFiles, {
-      root: this.config.publicDir,
-      prefix: '/',
-    });
+  private setupPlugins(): void {
+    const origin = this.config.publicUrl ? [this.config.publicUrl] : true;
+    this.app.register(cors, { origin, credentials: true });
+    this.app.register(websocket);
+    // Sign the session cookie with the configured secret, else derive from encryption key.
+    const secret = this.config.sessionSecret || process.env.SESSION_SECRET || process.env.MCP_ENCRYPTION_KEY || 'insecure-default';
+    this.app.register(cookies, { secret });
+    // Serve the admin UI (SPA). Guard against a missing build dir.
+    this.app.register(staticFiles, { root: this.config.publicDir, prefix: '/' });
   }
 
   private setupRoutes(): void {
-    // Health check
+    // --- Health (public) ---
     this.app.get('/health', async () => ({ status: 'ok', timestamp: Date.now() }));
 
-    // Account management
-    this.app.get('/api/accounts', async () => {
-      const accounts = await this.storage.listAccounts();
-      return { accounts: accounts.map(a => ({
-        id: a.id,
-        provider: a.provider,
-        email: a.email,
-        displayName: a.displayName,
-        status: a.status,
-        lastSyncAt: a.lastSyncAt,
-        createdAt: a.createdAt,
-        updatedAt: a.updatedAt,
-      })) };
+    // --- Auth: bootstrap + login use the session map ---
+    const sessions = new Map<string, string>(); // sessionToken -> userId
+
+    const currentUser = async (req: any): Promise<User | null> => {
+      const token = req.cookies?.[SESSION_COOKIE];
+      if (!token) return null;
+      const userId = sessions.get(token);
+      if (!userId) return null;
+      return this.storage.getUser(userId);
+    };
+
+    // First-run admin creation (only when no users exist)
+    this.app.post('/api/auth/bootstrap', async (request: any, reply: any) => {
+      const { username, password, displayName } = request.body;
+      if (!username || !password) return reply.code(400).send({ error: 'username and password required' });
+      const user = await this.authService.bootstrapAdmin({ username, displayName, password });
+      const token = randomUUID();
+      sessions.set(token, user.id);
+      reply.setCookie(SESSION_COOKIE, token, { httpOnly: true, sameSite: 'lax', path: '/', maxAge: 7 * 24 * 60 * 60 });
+      return { user: publicUser(user), bootstrap: true };
     });
 
-    this.app.get('/api/accounts/:id', async (request: any) => {
-      const account = await this.storage.getAccount(request.params.id);
-      if (!account) throw new Error('Account not found');
-      return { account: {
-        id: account.id,
-        provider: account.provider,
-        email: account.email,
-        displayName: account.displayName,
-        status: account.status,
-        lastSyncAt: account.lastSyncAt,
-        createdAt: account.createdAt,
-        updatedAt: account.updatedAt,
-      }};
+    this.app.post('/api/auth/login', async (request: any, reply: any) => {
+      const { username, password } = request.body;
+      if (!username || !password) return reply.code(400).send({ error: 'username and password required' });
+      try {
+        const user = await this.authService.authenticate(username, password);
+        const token = randomUUID();
+        sessions.set(token, user.id);
+        reply.setCookie(SESSION_COOKIE, token, { httpOnly: true, sameSite: 'lax', path: '/', maxAge: 7 * 24 * 60 * 60 });
+        return { user: publicUser(user) };
+      } catch (e: any) {
+        return reply.code(401).send({ error: e.message });
+      }
     });
 
-    this.app.post('/api/accounts', async (request: any) => {
-      const { provider, email, config } = request.body;
-      if (!provider || !email) throw new Error('Provider and email are required');
-
-      // Generate OAuth config - in real implementation, client credentials would come from env/secrets
-      const oauthConfig: OAuthConfig = {
-        provider,
-        clientId: process.env[`${provider.toUpperCase()}_CLIENT_ID`] || '',
-        clientSecret: process.env[`${provider.toUpperCase()}_CLIENT_SECRET`] || '',
-        redirectUri: `${process.env.BASE_URL || `http://localhost:${this.config.port}`}/oauth/callback`,
-        scopes: this.getDefaultScopes(provider),
-        tenantId: config?.tenantId,
-        accountsServer: config?.accountsServer,
-      };
-
-      // Start OAuth flow
-      const flow = await this.oauthManager.startFlow(provider, 'authorization_code', oauthConfig);
-      
-      // Store pending account with OAuth state
-      // In real implementation, save pending account with state
-      return { 
-        authorizeUrl: flow.verificationUri,
-        state: flow.state,
-        message: `Visit ${flow.verificationUri} and enter code: ${flow.userCode || flow.state}` 
-      };
-    });
-
-    this.app.delete('/api/accounts/:id', async (request: any) => {
-      await this.storage.deleteAccount(request.params.id);
+    this.app.post('/api/auth/logout', async (request: any, reply: any) => {
+      const token = request.cookies?.[SESSION_COOKIE];
+      if (token) sessions.delete(token);
+      reply.clearCookie(SESSION_COOKIE, { path: '/' });
       return { success: true };
     });
 
-    this.app.post('/api/accounts/:id/sync', async (request: any) => {
-      const { types } = request.body;
-      // Trigger sync - would integrate with sync service
-      return { message: 'Sync triggered', types };
+    this.app.get('/api/auth/me', async (request: any, reply: any) => {
+      const user = await currentUser(request);
+      if (!user) return reply.code(401).send({ error: 'Unauthorized' });
+      return { user: publicUser(user) };
     });
 
-    // OAuth routes
-    this.app.get('/oauth/start', async (request: any) => {
-      const { provider, flow = 'authorization_code' } = request.query;
-      if (!provider) throw new Error('Provider is required');
+    // --- Auth gate for everything else under /api ---
+    this.app.addHook('preHandler', async (request: any, reply: any) => {
+      const url = request.raw.url || '';
+      const isPublic = url.startsWith('/health')
+        || url === '/api/auth/login'
+        || url === '/api/auth/bootstrap'
+        || url === '/api/auth/logout'
+        || !url.startsWith('/api/');
+      if (isPublic) return;
+      const user = await currentUser(request);
+      if (!user) return reply.code(401).send({ error: 'Unauthorized' });
+      request.user = user;
+    });
 
-      const oauthConfig: OAuthConfig = {
-        provider: provider as ProviderName,
-        clientId: process.env[`${provider.toUpperCase()}_CLIENT_ID`] || '',
-        clientSecret: process.env[`${provider.toUpperCase()}_CLIENT_SECRET`] || '',
-        redirectUri: `${process.env.BASE_URL || `http://localhost:${this.config.port}`}/oauth/callback`,
-        scopes: this.getDefaultScopes(provider as ProviderName),
+    // --- Accounts (scoped to the logged-in user) ---
+    this.app.get('/api/accounts', async (request: any) => {
+      const accounts = await this.storage.listAccounts(request.user.id);
+      return { accounts: accounts.map(a => ({
+        id: a.id, provider: a.provider, name: a.name, slug: a.slug, email: a.email,
+        displayName: a.displayName, status: a.status, health: a.health,
+        lastSyncAt: a.lastSyncAt, authenticated: !!(a.credentials?.accessToken || a.credentials?.appPassword),
+      })) };
+    });
+
+    this.app.get('/api/accounts/:id', async (request: any, reply: any) => {
+      const account = await this.storage.getAccount(request.params.id);
+      if (!account || account.ownerId !== request.user.id) return reply.code(404).send({ error: 'Account not found' });
+      return { account: {
+        id: account.id, provider: account.provider, name: account.name, slug: account.slug, email: account.email,
+        displayName: account.displayName, status: account.status, health: account.health, lastSyncAt: account.lastSyncAt,
+        authenticated: !!(account.credentials?.accessToken || account.credentials?.appPassword),
+        oauthClientId: account.credentials?.oauthClientId,
+      } };
+    });
+
+    this.app.post('/api/accounts', async (request: any, reply: any) => {
+      const { name, provider, slug, email, config, oauthClientId } = request.body;
+      if (!name || !provider || !email) return reply.code(400).send({ error: 'name, provider, email required' });
+      const id = randomUUID();
+      const account = {
+        id, ownerId: request.user.id, provider, name, slug: slug || generateSlug(name, id),
+        email, displayName: undefined, credentials: { oauthClientId, config },
+        status: 'active' as const, health: 'unknown' as const, lastSyncAt: undefined,
+        createdAt: Date.now(), updatedAt: Date.now(),
       };
-
-      const flowResult = await this.oauthManager.startFlow(provider as ProviderName, flow as any, oauthConfig);
-      return flowResult;
+      await this.storage.saveAccount(account);
+      return reply.code(201).send({ account: { id: account.id, slug: account.slug, name: account.name } });
     });
 
+    this.app.patch('/api/accounts/:id', async (request: any, reply: any) => {
+      const account = await this.storage.getAccount(request.params.id);
+      if (!account || account.ownerId !== request.user.id) return reply.code(404).send({ error: 'Account not found' });
+      const allowed = ['name', 'slug', 'displayName', 'status', 'health', 'email'];
+      const updates: any = {};
+      for (const k of allowed) if (request.body[k] !== undefined) updates[k] = request.body[k];
+      await this.storage.updateAccount(account.id, updates);
+      return { success: true };
+    });
+
+    this.app.delete('/api/accounts/:id', async (request: any, reply: any) => {
+      const account = await this.storage.getAccount(request.params.id);
+      if (!account || account.ownerId !== request.user.id) return reply.code(404).send({ error: 'Account not found' });
+      await this.storage.deleteAccount(account.id);
+      return { success: true };
+    });
+
+    this.app.post('/api/accounts/:id/reauth', async (request: any, reply: any) => {
+      const account = await this.storage.getAccount(request.params.id);
+      if (!account || account.ownerId !== request.user.id) return reply.code(404).send({ error: 'Account not found' });
+      if (!AUTH_PROVIDERS.includes(account.provider as ProviderName)) {
+        return reply.code(400).send({ error: 'Re-auth not supported for this provider' });
+      }
+      // Resolve the OAuth client: explicit, or first matching owned client.
+      let client: OAuthClient | null = null;
+      if (request.body?.oauthClientId) {
+        client = await this.storage.getOAuthClient(request.body.oauthClientId);
+        if (client && client.ownerId !== request.user.id) client = null;
+      }
+      if (!client) {
+        const clients = await this.storage.listOAuthClients(request.user.id);
+        client = clients.find((c) => c.provider === account.provider && c.enabled) || null;
+      }
+      if (!client) {
+        return reply.code(400).send({ error: `No OAuth client available for ${account.provider}. Add one in OAuth Clients first.` });
+      }
+      const redirectUri = `${this.publicUrl}/oauth/callback`;
+      const flow = await this.oauthManager.startFlow(account.provider as ProviderName, 'device_code', OAuthManager.clientToConfig(client, redirectUri));
+      // Persist the chosen client on the account for later token refresh.
+      await this.storage.updateCredentials(account.id, { oauthClientId: client.id });
+      return { verificationUri: flow.verificationUri, userCode: flow.userCode, deviceCode: flow.deviceCode, interval: flow.interval, state: flow.state };
+    });
+
+    // OAuth callback completes a flow and stores tokens on the pending account.
     this.app.get('/oauth/callback', async (request: any) => {
-      const { code, state, error } = request.query;
-      
-      if (error) {
-        return this.app.reply.view('/oauth/error', { error });
-      }
-
-      if (!code || !state) {
-        throw new Error('Missing code or state');
-      }
-
-      const tokens = await this.oauthManager.completeFlow(state, code);
-      
-      // In real implementation, associate tokens with pending account
-      return { success: true, message: 'Account connected successfully' };
+      const { code, state } = request.query;
+      if (!code || !state) return { error: 'Missing code or state' };
+      const tokens = await this.oauthManager.completeFlow(String(state), String(code));
+      return { success: true, message: 'OAuth complete. Return to the app to finish linking.' };
     });
 
-    this.app.post('/oauth/device-poll', async (request: any) => {
-      const { deviceCode, interval, provider, clientId, clientSecret, tenantId } = request.body;
-      if (!deviceCode || !provider) throw new Error('Device code and provider required');
+    // --- OAuth clients (per-user) ---
+    this.app.get('/api/oauth-clients', async (request: any) => {
+      const clients = await this.storage.listOAuthClients(request.user.id);
+      return { clients: clients.map(publicClient) };
+    });
 
-      const oauthConfig: OAuthConfig = {
-        provider,
-        clientId,
-        clientSecret,
-        redirectUri: '',
-        scopes: this.getDefaultScopes(provider),
-        tenantId,
+    this.app.post('/api/oauth-clients', async (request: any, reply: any) => {
+      const { provider, label, clientId, clientSecret, scopes, tenantId, accountsServer } = request.body;
+      if (!provider || !label || !clientId) return reply.code(400).send({ error: 'provider, label, clientId required' });
+      if (!AUTH_PROVIDERS.includes(provider)) return reply.code(400).send({ error: `Unsupported provider: ${provider}` });
+      const client: OAuthClient = {
+        id: randomUUID(), ownerId: request.user.id, provider, label, clientId, clientSecret: clientSecret || '',
+        scopes: scopes || [], tenantId, accountsServer, enabled: true, createdAt: Date.now(), updatedAt: Date.now(),
       };
-
-      const tokens = await this.oauthManager.pollDeviceCode(deviceCode, interval, oauthConfig);
-      return { tokens };
+      await this.storage.saveOAuthClient(client);
+      return reply.code(201).send({ client: publicClient(client) });
     });
 
-    // WebSocket for real-time updates
-    this.app.register(async (fastify: any) => {
-      fastify.get('/ws', { websocket: true }, (connection: any, request: any) => {
-        connection.socket.on('message', (message: any) => {
-          // Handle incoming messages
-        });
-      });
+    this.app.delete('/api/oauth-clients/:id', async (request: any, reply: any) => {
+      const client = await this.storage.getOAuthClient(request.params.id);
+      if (!client || client.ownerId !== request.user.id) return reply.code(404).send({ error: 'Client not found' });
+      await this.storage.deleteOAuthClient(client.id);
+      return { success: true };
     });
 
-    // Serve admin UI for all other routes (SPA fallback)
+    // --- Users (admin only) ---
+    this.app.get('/api/users', async (request: any, reply: any) => {
+      if (request.user.role !== 'admin') return reply.code(403).send({ error: 'Admin only' });
+      const users = await this.storage.listUsers();
+      return { users: users.map(publicUser) };
+    });
+
+    this.app.post('/api/users', async (request: any, reply: any) => {
+      if (request.user.role !== 'admin') return reply.code(403).send({ error: 'Admin only' });
+      const { username, password, displayName, role } = request.body;
+      if (!username || !password) return reply.code(400).send({ error: 'username and password required' });
+      try {
+        const user = await this.authService.createUser({ username, displayName, password, role: role === 'admin' ? 'admin' : 'user' });
+        return reply.code(201).send({ user: publicUser(user) });
+      } catch (e: any) {
+        return reply.code(400).send({ error: e.message });
+      }
+    });
+
+    this.app.delete('/api/users/:id', async (request: any, reply: any) => {
+      if (request.user.role !== 'admin') return reply.code(403).send({ error: 'Admin only' });
+      const target = await this.storage.getUser(request.params.id);
+      if (!target) return reply.code(404).send({ error: 'User not found' });
+      if (target.id === request.user.id) return reply.code(400).send({ error: 'Cannot delete yourself' });
+      if (target.role === 'admin' && await this.countAdmins() <= 1) return reply.code(400).send({ error: 'Cannot delete the last admin' });
+      await this.storage.deleteUser(target.id);
+      return { success: true };
+    });
+
+    this.app.patch('/api/users/:id', async (request: any, reply: any) => {
+      if (request.user.role !== 'admin') return reply.code(403).send({ error: 'Admin only' });
+      const { displayName, role } = request.body;
+      const updates: any = {};
+      if (displayName !== undefined) updates.displayName = displayName;
+      if (role !== undefined) updates.role = role === 'admin' ? 'admin' : 'user';
+      await this.storage.updateUser(request.params.id, updates);
+      return { success: true };
+    });
+
+    this.app.post('/api/users/:id/reset-password', async (request: any, reply: any) => {
+      if (request.user.role !== 'admin') return reply.code(403).send({ error: 'Admin only' });
+      const { password } = request.body;
+      if (!password) return reply.code(400).send({ error: 'password required' });
+      await this.authService.resetPassword(request.params.id, password);
+      return { success: true };
+    });
+
+    // --- Settings (own user) ---
+    this.app.get('/api/settings/me', async (request: any) => {
+      const user = await this.storage.getUser(request.user.id);
+      return { user: publicUser(user!), mcpApiKey: user?.mcpApiKey };
+    });
+
+    this.app.patch('/api/settings/me', async (request: any, reply: any) => {
+      const { displayName, currentPassword, newPassword } = request.body;
+      if (newPassword) {
+        if (!currentPassword) return reply.code(400).send({ error: 'currentPassword required to change password' });
+        try {
+          await this.authService.changePassword(request.user.id, currentPassword, newPassword);
+        } catch (e: any) {
+          return reply.code(400).send({ error: e.message });
+        }
+      }
+      if (displayName !== undefined) {
+        await this.storage.updateUser(request.user.id, { displayName });
+      }
+      const user = await this.storage.getUser(request.user.id);
+      return { user: publicUser(user!), mcpApiKey: user?.mcpApiKey };
+    });
+
+    this.app.post('/api/settings/me/rotate-apikey', async (request: any) => {
+      const key = await this.authService.rotateApiKey(request.user.id);
+      return { mcpApiKey: key };
+    });
+
+    // --- SPA fallback (public UI; 404 fix) ---
     this.app.setNotFoundHandler(async (request: any, reply: any) => {
-      if (request.raw.url?.startsWith('/api/') || request.raw.url?.startsWith('/oauth/') || request.raw.url?.startsWith('/ws')) {
+      const url = request.raw.url || '';
+      if (url.startsWith('/api/') || url.startsWith('/oauth/') || url.startsWith('/ws')) {
         reply.code(404);
         return { error: 'Not found' };
       }
-      return reply.sendFile('index.html');
+      try {
+        return reply.sendFile('index.html');
+      } catch {
+        reply.code(404);
+        return { error: `Not found (no UI built at ${this.config.publicDir})` };
+      }
     });
   }
 
-  private async setupMcpEndpoint(): Promise<void> {
-    // Mount the MCP server over Streamable HTTP on the same port as the
-    // management API, so a single container serves web UI + REST + MCP.
-    // Each session gets its own McpEccServer + transport, because the MCP
-    // Protocol can only connect to one transport at a time. Sessions are
-    // keyed by the Mcp-Session-Id the client returns; the id is generated
-    // during initialize, so we register it in the map after handling.
+  private async countAdmins(): Promise<number> {
+    const users = await this.storage.listUsers();
+    return users.filter((u) => u.role === 'admin').length;
+  }
+
+  private setupMcpEndpoint(): void {
     const sessions = new Map<string, { api: McpEccServer; transport: StreamableHTTPServerTransport }>();
 
-    const getOrCreateSession = async (request: any) => {
-      const sessionId = request.headers['mcp-session-id'];
-      if (sessionId && sessions.has(sessionId)) {
-        return sessions.get(sessionId)!;
+    const authUser = async (request: any): Promise<User | null> => {
+      const auth = request.headers['authorization'];
+      if (!auth || !auth.startsWith('Bearer ')) return null;
+      const key = auth.slice(7).trim();
+      try {
+        return await this.authService.validateApiKey(key);
+      } catch {
+        return null;
       }
-      const api = new McpEccServer(this.storage);
-      const transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: () => randomUUID(),
-      });
+    };
+
+    const getOrCreateSession = async (request: any): Promise<{ api: McpEccServer; transport: StreamableHTTPServerTransport }> => {
+      const sessionId = request.headers['mcp-session-id'];
+      if (sessionId && sessions.has(sessionId)) return sessions.get(sessionId)!;
+      // New session: create a server scoped to the authenticated user.
+      const user = await authUser(request);
+      if (!user) throw new Error('Unauthorized: missing or invalid MCP API key');
+      const api = new McpEccServer(this.storage, user.id);
+      const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: () => randomUUID() });
       await api.getServer().connect(transport);
       return { api, transport };
     };
 
-    const handle = async (request: any, reply: any, session: { api: McpEccServer; transport: StreamableHTTPServerTransport }): Promise<void> => {
+    const handle = async (request: any, reply: any, session: { api: McpEccServer; transport: StreamableHTTPServerTransport }) => {
       try {
         await session.transport.handleRequest(request.raw, reply.raw, request.body);
-        // Register the session once the transport has an id (i.e. after initialize).
         if (session.transport.sessionId && !sessions.has(session.transport.sessionId)) {
           sessions.set(session.transport.sessionId, session);
         }
-      } catch (error) {
+      } catch (error: any) {
         this.app.log.error({ error }, 'MCP request handler failed');
         if (!reply.raw.writableEnded) {
-          reply.raw.statusCode = 500;
-          reply.raw.end(JSON.stringify({ jsonrpc: '2.0', error: { code: -32603, message: String(error) }, id: request.body?.id ?? null }));
+          reply.raw.statusCode = error?.message?.startsWith('Unauthorized') ? 401 : 500;
+          reply.raw.end(JSON.stringify({ jsonrpc: '2.0', error: { code: -32603, message: String(error) } }));
         }
       }
     };
 
-    // GET: open an SSE stream for server-initiated messages / event stream.
-    this.app.get('/mcp', async (request: any, reply: any) => {
-      const session = await getOrCreateSession(request);
-      reply.hijack();
-      await handle(request, reply, session);
-    });
-
-    // POST: JSON-RPC (initialize, tools/list, tools/call ...).
-    this.app.post('/mcp', async (request: any, reply: any) => {
-      const session = await getOrCreateSession(request);
-      reply.hijack();
-      await handle(request, reply, session);
-    });
-
-    // DELETE: close the transport/session.
-    this.app.delete('/mcp', async (request: any, reply: any) => {
-      const sessionId = request.headers['mcp-session-id'];
-      const session = sessionId ? sessions.get(sessionId) : undefined;
-      reply.hijack();
+    this.app.all('/mcp', async (request: any, reply: any) => {
       try {
-        if (session) {
-          await session.transport.handleRequest(request.raw, reply.raw, request.body);
-          await session.transport.close();
-          sessions.delete(sessionId);
-        } else {
-          reply.raw.statusCode = 200;
-          reply.raw.end();
-        }
-      } catch (error) {
-        this.app.log.error({ error }, 'MCP DELETE handler failed');
-        if (!reply.raw.writableEnded) {
-          reply.raw.statusCode = 500;
-          reply.raw.end(JSON.stringify({ jsonrpc: '2.0', error: { code: -32603, message: String(error) }, id: null }));
-        }
+        const session = await getOrCreateSession(request);
+        reply.hijack();
+        await handle(request, reply, session);
+      } catch (error: any) {
+        reply.code(401).send({ error: error?.message || 'Unauthorized' });
       }
     });
   }
 
-  private getDefaultScopes(provider: ProviderName): string[] {
-    switch (provider) {
-      case 'google':
-        return [
-          'https://www.googleapis.com/auth/gmail.modify',
-          'https://www.googleapis.com/auth/calendar',
-          'https://www.googleapis.com/auth/contacts',
-          'https://www.googleapis.com/auth/userinfo.email',
-          'https://www.googleapis.com/auth/userinfo.profile',
-        ];
-      case 'microsoft':
-        return [
-          'offline_access',
-          'https://graph.microsoft.com/Mail.ReadWrite',
-          'https://graph.microsoft.com/Mail.Send',
-          'https://graph.microsoft.com/Calendars.ReadWrite',
-          'https://graph.microsoft.com/Contacts.ReadWrite',
-          'https://graph.microsoft.com/User.Read',
-        ];
-      case 'zoho':
-        return [
-          'ZohoMail.messages.ALL',
-          'ZohoCalendar.events.ALL',
-          'ZohoContacts.contacts.ALL',
-          'ZohoMail.accounts.READ',
-        ];
-      default:
-        return [];
-    }
-  }
-
   async start(): Promise<void> {
     await this.app.listen({ port: this.config.port, host: this.config.host });
-    console.log(`Management API listening on http://${this.config.host}:${this.config.port}`);
+    console.log(`mcp-ecc management API listening on http://${this.config.host}:${this.config.port}`);
   }
 
   async stop(): Promise<void> {
