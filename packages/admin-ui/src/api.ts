@@ -99,6 +99,19 @@ export const authApi = {
     send<LoginResult>('/api/auth/bootstrap', 'POST', { username, password, displayName }),
 };
 
+/* ------------------------------- public info ------------------------ */
+
+export interface ServerInfo {
+  publicUrl: string;
+  oauthRedirectUri: string;
+  mcpEndpoint: string;
+}
+
+export const infoApi = {
+  fetch: () => get<ServerInfo>('/api/info'),
+  bootstrapStatus: () => get<{ needsBootstrap: boolean }>('/api/bootstrap-status'),
+};
+
 /* ------------------------------ accounts ----------------------------- */
 
 export interface TestConnectionResult {
@@ -186,10 +199,10 @@ export function isAuthenticatedAccount(a: Account): boolean {
 
 export const PROVIDER_LABELS: Record<ProviderName, string> = {
   google: 'Google',
-  microsoft: 'Microsoft',
+  microsoft: 'Microsoft 365 / Outlook',
   zoho: 'Zoho',
-  imap: 'IMAP',
-  smtp: 'SMTP',
+  imap: 'IMAP / SMTP',
+  smtp: 'IMAP / SMTP',
   caldav: 'CalDAV',
   carddav: 'CardDAV',
 };

@@ -43,6 +43,16 @@ export interface AccountCreateInput {
   slug: string;
   email: string;
   config?: Record<string, unknown>;
+  oauthClientId?: string;
+  // Inline OAuth client creation (used when no saved client matches)
+  client?: {
+    label?: string;
+    clientId?: string;
+    clientSecret?: string;
+    scopes?: string[];
+    tenantId?: string;
+    accountsServer?: string;
+  };
 }
 
 export interface ApiError {

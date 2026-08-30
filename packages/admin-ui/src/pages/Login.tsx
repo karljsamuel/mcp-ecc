@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { Alert } from '../components/ui';
@@ -9,8 +9,14 @@ export function Login({ push }: { push: ToastPush }) {
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const { login, refresh } = useAuth();
+  const { login, refresh, needsBootstrap } = useAuth();
   const navigate = useNavigate();
+
+  // A fresh install has no admin account: send the user to create one
+  // instead of showing a blank login (which would be unusable).
+  useEffect(() => {
+    if (needsBootstrap) navigate('/bootstrap', { replace: true });
+  }, [needsBootstrap, navigate]);
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();

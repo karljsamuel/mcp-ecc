@@ -8,7 +8,7 @@ import {
   type ReactNode,
 } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { authApi, setUnauthorizedHandler, type AuthUser } from '../api';
+import { authApi, infoApi, setUnauthorizedHandler, type AuthUser } from '../api';
 
 interface AuthContextValue {
   user: AuthUser | null;
@@ -26,6 +26,7 @@ const PUBLIC_PATHS = ['/login', '/bootstrap'];
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
+  const [needsBootstrap, setNeedsBootstrap] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -46,10 +47,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const { user: u } = await authApi.me();
       setUser(u);
       setLoading(false);
+      setNeedsBootstrap(false);
       return u;
     } catch {
+      // Not logged in — check whether we need to bootstrap the first admin.
+      try {
+        const { needsBootstrap } = await infoApi.bootstrapStatus();
+        setNeedsBootstrap(!!needsBootstrap);
+        setLoading(false);
+      } catch {
+        setNeedsBootstrap(false);
+        setLoading(false);
+      }
       setUser(null);
-      setLoading(false);
       return null;
     }
   }, []);
@@ -62,6 +72,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     async (username: string, password: string) => {
       const { user: u } = await authApi.login(username, password);
       setUser(u);
+      setNeedsBootstrap(false);
     },
     [],
   );
@@ -76,8 +87,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [navigate]);
 
   const value = useMemo<AuthContextValue>(
-    () => ({ user, loading, needsBootstrap: false, login, logout, refresh }),
-    [user, loading, login, logout, refresh],
+    () => ({ user, loading, needsBootstrap, login, logout, refresh }),
+    [user, loading, needsBootstrap, login, logout, refresh],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

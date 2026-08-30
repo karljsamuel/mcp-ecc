@@ -6,6 +6,7 @@ import cookies from '@fastify/cookie';
 import { randomUUID } from 'crypto';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import { readFileSync, existsSync } from 'fs';
 import type { StorageAdapter, ProviderName, OAuthClient, User } from '@mcp-ecc/core';
 import { OAuthManager, AuthService, generateSlug } from '@mcp-ecc/core';
 import { McpEccServer } from '@mcp-ecc/mcp-server';
@@ -75,6 +76,19 @@ export class ManagementApi {
     // --- Health (public) ---
     this.app.get('/health', async () => ({ status: 'ok', timestamp: Date.now() }));
 
+    // --- Public info (no auth): expose redirect URI + MCP endpoint for the UI ---
+    this.app.get('/api/info', async () => ({
+      publicUrl: this.publicUrl,
+      oauthRedirectUri: `${this.publicUrl}/oauth/callback`,
+      mcpEndpoint: `${this.publicUrl}/mcp`,
+    }));
+
+    // --- Public bootstrap status (no auth): used to show the 'create admin' screen ---
+    this.app.get('/api/bootstrap-status', async () => {
+      const count = await this.storage.countUsers();
+      return { needsBootstrap: count === 0 };
+    });
+
     // --- Auth: bootstrap + login use the session map ---
     const sessions = new Map<string, string>(); // sessionToken -> userId
 
@@ -86,8 +100,12 @@ export class ManagementApi {
       return this.storage.getUser(userId);
     };
 
-    // First-run admin creation (only when no users exist)
+    // First-run admin creation (only when no users exist — hard-gated)
     this.app.post('/api/auth/bootstrap', async (request: any, reply: any) => {
+      const count = await this.storage.countUsers();
+      if (count > 0) {
+        return reply.code(400).send({ error: 'Admin already configured. Contact an existing admin for a user account.' });
+      }
       const { username, password, displayName } = request.body;
       if (!username || !password) return reply.code(400).send({ error: 'username and password required' });
       const user = await this.authService.bootstrapAdmin({ username, displayName, password });
@@ -128,6 +146,8 @@ export class ManagementApi {
     this.app.addHook('preHandler', async (request: any, reply: any) => {
       const url = request.raw.url || '';
       const isPublic = url.startsWith('/health')
+        || url === '/api/info'
+        || url === '/api/bootstrap-status'
         || url === '/api/auth/login'
         || url === '/api/auth/bootstrap'
         || url === '/api/auth/logout'
@@ -160,12 +180,31 @@ export class ManagementApi {
     });
 
     this.app.post('/api/accounts', async (request: any, reply: any) => {
-      const { name, provider, slug, email, config, oauthClientId } = request.body;
+      const { name, provider, slug, email, config, oauthClientId, client } = request.body;
       if (!name || !provider || !email) return reply.code(400).send({ error: 'name, provider, email required' });
       const id = randomUUID();
+      const credentials: any = { config };
+      const ownerId = request.user.id;
+
+      // If inline client credentials were provided for an OAuth provider,
+      // save them as a reusable OAuth client and link it to this account.
+      if (client && AUTH_PROVIDERS.includes(provider)) {
+        if (!client.clientId) return reply.code(400).send({ error: 'client.clientId required for a new OAuth client' });
+        const saved: OAuthClient = {
+          id: randomUUID(), ownerId, provider, label: client.label || `${name} client`,
+          clientId: client.clientId, clientSecret: client.clientSecret || '',
+          scopes: client.scopes || [], tenantId: client.tenantId, accountsServer: client.accountsServer,
+          enabled: true, createdAt: Date.now(), updatedAt: Date.now(),
+        };
+        await this.storage.saveOAuthClient(saved);
+        credentials.oauthClientId = saved.id;
+      } else if (oauthClientId) {
+        credentials.oauthClientId = oauthClientId;
+      }
+
       const account = {
-        id, ownerId: request.user.id, provider, name, slug: slug || generateSlug(name, id),
-        email, displayName: undefined, credentials: { oauthClientId, config },
+        id, ownerId, provider, name, slug: slug || generateSlug(name, id),
+        email, displayName: undefined, credentials,
         status: 'active' as const, health: 'unknown' as const, lastSyncAt: undefined,
         createdAt: Date.now(), updatedAt: Date.now(),
       };
@@ -297,31 +336,54 @@ export class ManagementApi {
     });
 
     // --- Settings (own user) ---
-    this.app.get('/api/settings/me', async (request: any) => {
-      const user = await this.storage.getUser(request.user.id);
-      return { user: publicUser(user!), mcpApiKey: user?.mcpApiKey };
-    });
+        this.app.get('/api/settings/me', async (request: any) => {
+          const user = await this.storage.getUser(request.user.id);
+          if (!user) return { error: 'User not found' };
+          return { settings: publicUser(user), mcpApiKey: user.mcpApiKey };
+        });
 
-    this.app.patch('/api/settings/me', async (request: any, reply: any) => {
-      const { displayName, currentPassword, newPassword } = request.body;
-      if (newPassword) {
-        if (!currentPassword) return reply.code(400).send({ error: 'currentPassword required to change password' });
-        try {
-          await this.authService.changePassword(request.user.id, currentPassword, newPassword);
-        } catch (e: any) {
-          return reply.code(400).send({ error: e.message });
-        }
-      }
-      if (displayName !== undefined) {
-        await this.storage.updateUser(request.user.id, { displayName });
-      }
-      const user = await this.storage.getUser(request.user.id);
-      return { user: publicUser(user!), mcpApiKey: user?.mcpApiKey };
-    });
+        this.app.patch('/api/settings/me', async (request: any, reply: any) => {
+          const { displayName, currentPassword, newPassword } = request.body;
+          if (newPassword) {
+            if (!currentPassword) return reply.code(400).send({ error: 'currentPassword required to change password' });
+            try {
+              await this.authService.changePassword(request.user.id, currentPassword, newPassword);
+            } catch (e: any) {
+              return reply.code(400).send({ error: e.message });
+            }
+          }
+          if (displayName !== undefined) {
+            await this.storage.updateUser(request.user.id, { displayName });
+          }
+          const user = await this.storage.getUser(request.user.id);
+          if (!user) return reply.code(404).send({ error: 'User not found' });
+          return { settings: publicUser(user), mcpApiKey: user.mcpApiKey };
+        });
 
     this.app.post('/api/settings/me/rotate-apikey', async (request: any) => {
       const key = await this.authService.rotateApiKey(request.user.id);
       return { mcpApiKey: key };
+    });
+
+    // --- Public setup docs (for AI agents to self-configure) ---
+    this.app.get('/setup/skill.md', async (_request: any, reply: any) => {
+      try {
+        const p = join(__dirname, '../../..', 'SKILL.md');
+        const text = this.readIfExists(p);
+        return reply.type('text/markdown').send(text);
+      } catch {
+        return reply.code(404).send('SKILL.md not found');
+      }
+    });
+
+    this.app.get('/setup/llms.txt', async (_request: any, reply: any) => {
+      try {
+        const p = join(__dirname, '../../..', 'llms.txt');
+        const text = this.readIfExists(p);
+        return reply.type('text/plain').send(text);
+      } catch {
+        return reply.code(404).send('llms.txt not found');
+      }
     });
 
     // --- SPA fallback (public UI; 404 fix) ---
@@ -343,6 +405,11 @@ export class ManagementApi {
   private async countAdmins(): Promise<number> {
     const users = await this.storage.listUsers();
     return users.filter((u) => u.role === 'admin').length;
+  }
+
+  private readIfExists(p: string): string {
+    if (!existsSync(p)) throw new Error('file not found');
+    return readFileSync(p, 'utf8');
   }
 
   private setupMcpEndpoint(): void {

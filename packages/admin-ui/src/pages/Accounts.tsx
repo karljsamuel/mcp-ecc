@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   accountsApi,
+  infoApi,
   isAuthenticatedAccount,
   oauthClientsApi,
   PROVIDER_LABELS,
   STATUS_LABELS,
+  type ServerInfo,
 } from '../api';
-import type { Account, AccountStatus, OAuthClient, ProviderName } from '../types';
+import type { Account, AccountCreateInput, AccountStatus, OAuthClient, ProviderName } from '../types';
 import {
   Alert,
   HealthBadge,
@@ -16,7 +18,8 @@ import {
 } from '../components/ui';
 import type { ToastPush } from './toast';
 
-const PROVIDERS: ProviderName[] = ['google', 'microsoft', 'zoho', 'imap', 'smtp', 'caldav', 'carddav'];
+const PROVIDERS: ProviderName[] = ['google', 'microsoft', 'zoho', 'imap', 'caldav', 'carddav'];
+const isOAuthProvider = (p: ProviderName) => ['google', 'microsoft', 'zoho'].includes(p);
 
 function KeyIcon({ authenticated }: { authenticated: boolean }) {
   return (
@@ -160,6 +163,7 @@ export function Accounts({ push }: { push: ToastPush }) {
         onClose={() => setCreating(false)}
         onCreated={handleCreated}
         push={push}
+        oauthClients={oauthClients}
       />
 
       {editAccount && (
@@ -186,11 +190,13 @@ function CreateAccountModal({
   onClose,
   onCreated,
   push,
+  oauthClients,
 }: {
   open: boolean;
   onClose: () => void;
   onCreated: () => void;
   push: ToastPush;
+  oauthClients: OAuthClient[];
 }) {
   const [provider, setProvider] = useState<ProviderName>('google');
   const [name, setName] = useState('');
@@ -199,12 +205,46 @@ function CreateAccountModal({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // OAuth credential selection/creation state
+  const [useSavedClient, setUseSavedClient] = useState(true);
+  const [selectedClientId, setSelectedClientId] = useState('');
+  const [label, setLabel] = useState('');
+  const [clientId, setClientId] = useState('');
+  const [clientSecret, setClientSecret] = useState('');
+  const [scopes, setScopes] = useState('');
+  const [tenantId, setTenantId] = useState('');
+  const [accountsServer, setAccountsServer] = useState('');
+  const [serverInfo, setServerInfo] = useState<ServerInfo | null>(null);
+
+  useEffect(() => {
+    infoApi.fetch().then(setServerInfo).catch(() => setServerInfo(null));
+  }, []);
+
+  const providerClients = useMemo(() => oauthClients.filter((c) => c.provider === provider), [oauthClients, provider]);
+
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     setBusy(true);
     try {
-      await accountsApi.create({ provider, name, slug, email });
+      let payload: AccountCreateInput = { provider, name, slug, email };
+      if (isOAuthProvider(provider)) {
+        if (useSavedClient) {
+          if (!selectedClientId) throw new Error('Select an OAuth client or switch to entering new credentials');
+          payload.oauthClientId = selectedClientId;
+        } else {
+          if (!clientId.trim()) throw new Error('Client ID is required for a new OAuth client');
+          payload.client = {
+            label: label.trim() || `${name} client`,
+            clientId: clientId.trim(),
+            clientSecret: clientSecret.trim(),
+            scopes: scopes.split(',').map((s) => s.trim()).filter(Boolean),
+            tenantId: tenantId.trim() || undefined,
+            accountsServer: accountsServer.trim() || undefined,
+          };
+        }
+      }
+      await accountsApi.create(payload);
       push(`Account "${name || email}" created`, 'success');
       onCreated();
     } catch (err) {
@@ -253,6 +293,83 @@ function CreateAccountModal({
             required
           />
         </div>
+
+        {isOAuthProvider(provider) && (
+          <div className="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-4">
+            <div className="text-sm font-semibold text-slate-700">OAuth client</div>
+
+            {serverInfo && (
+              <div className="rounded bg-white px-3 py-2 text-xs text-slate-600">
+                <span className="font-medium text-slate-700">Redirect URI:</span>{' '}
+                <code className="break-all font-mono text-indigo-700">{serverInfo.oauthRedirectUri}</code>
+                <div className="text-slate-500">
+                  Register this URL in the provider&apos;s OAuth console (Google / Azure / Zoho).
+                </div>
+              </div>
+            )}
+
+            {providerClients.length > 0 && (
+              <label className="flex items-center gap-2 text-sm text-slate-700">
+                <input
+                  type="radio"
+                  checked={useSavedClient}
+                  onChange={() => setUseSavedClient(true)}
+                  className="accent-indigo-600"
+                />
+                Use a saved client
+              </label>
+            )}
+            {useSavedClient && providerClients.length > 0 ? (
+              <select
+                className="input"
+                value={selectedClientId}
+                onChange={(e) => setSelectedClientId(e.target.value)}
+              >
+                <option value="">Select a client…</option>
+                {providerClients.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.label} ({c.clientId})
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <div className="space-y-2">
+                {providerClients.length > 0 && (
+                  <label className="flex items-center gap-2 text-sm text-slate-700">
+                    <input
+                      type="radio"
+                      checked={!useSavedClient}
+                      onChange={() => setUseSavedClient(false)}
+                      className="accent-indigo-600"
+                    />
+                    Enter new client credentials
+                  </label>
+                )}
+                <input className="input" value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Client label (e.g. Personal)" />
+                <input className="input" value={clientId} onChange={(e) => setClientId(e.target.value)} placeholder="Client ID" required={!useSavedClient} />
+                <input className="input" type="password" value={clientSecret} onChange={(e) => setClientSecret(e.target.value)} placeholder="Client secret" />
+                <input
+                  className="input"
+                  value={scopes}
+                  onChange={(e) => setScopes(e.target.value)}
+                  placeholder="Scopes (comma-separated, optional — defaults apply)"
+                />
+                {provider === 'microsoft' && (
+                  <input className="input" value={tenantId} onChange={(e) => setTenantId(e.target.value)} placeholder="Tenant ID (optional)" />
+                )}
+                {provider === 'zoho' && (
+                  <input
+                    className="input"
+                    value={accountsServer}
+                    onChange={(e) => setAccountsServer(e.target.value)}
+                    placeholder="Accounts server, e.g. accounts.zoho.eu (optional)"
+                  />
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
         <div className="flex justify-end gap-3 pt-2">
           <button type="button" onClick={onClose} className="btn-secondary">Cancel</button>
           <button type="submit" disabled={busy} className="btn-primary">

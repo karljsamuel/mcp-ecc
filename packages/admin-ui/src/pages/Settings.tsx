@@ -14,6 +14,7 @@ type SettingsData = {
 export function Settings({ push }: { push: ToastPush }) {
   const [data, setData] = useState<SettingsData | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const endpoint = typeof window !== 'undefined' ? `${window.location.origin}/mcp` : '/mcp';
 
   const [displayName, setDisplayName] = useState('');
   const [currentPassword, setCurrentPassword] = useState('');
@@ -151,20 +152,61 @@ export function Settings({ push }: { push: ToastPush }) {
         </div>
       </form>
 
-      {/* MCP API key */}
+      {/* MCP API key + connection */}
       <div className="card p-6">
-        <h2 className="mb-1 text-base font-semibold text-slate-900">MCP API key</h2>
+        <h2 className="mb-1 text-base font-semibold text-slate-900">MCP connection</h2>
         <p className="mb-4 text-sm text-slate-500">
-          Use this key when configuring the mcp-ecc MCP client. You can rotate it at any time.
+          Connect an AI agent to your mcp-ecc server using your personal API key. The key is scoped to <em>your</em> accounts only.
         </p>
+
         {data.mcpApiKey ? (
-          <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+          <div className="mb-4 flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
             <code className="flex-1 truncate font-mono text-sm text-slate-700">{data.mcpApiKey}</code>
             <CopyButton value={data.mcpApiKey} />
           </div>
         ) : (
-          <p className="text-sm text-slate-400">This account has no MCP API key yet.</p>
+          <p className="mb-4 text-sm text-slate-400">This account has no MCP API key yet.</p>
         )}
+
+        <div className="space-y-4">
+          <div>
+            <div className="label">Endpoint</div>
+            <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+              <code className="flex-1 truncate font-mono text-sm text-slate-700">{endpoint}</code>
+              <CopyButton value={endpoint} />
+            </div>
+          </div>
+
+          <div>
+            <div className="label">Client configuration</div>
+            <pre className="overflow-x-auto rounded-lg border border-slate-200 bg-slate-900 p-3 font-mono text-xs leading-relaxed text-emerald-300">
+{`{
+  "mcpServers": {
+    "mcp-ecc": {
+      "type": "http",
+      "url": ${JSON.stringify(endpoint)},
+      "headers": {
+        "Authorization": "Bearer ${data.mcpApiKey ?? '<your-api-key>'}"
+      }
+    }
+  }
+}`}
+            </pre>
+          </div>
+
+          <div className="text-sm text-slate-600">
+            For a guided, agent-readable setup, see the{' '}
+            <a href="/setup/skill.md" target="_blank" rel="noreferrer" className="font-medium text-indigo-600 hover:text-indigo-700">
+              SKILL.md runbook
+            </a>{' '}
+            ({' '}
+            <a href="/setup/llms.txt" target="_blank" rel="noreferrer" className="text-slate-500 hover:text-indigo-600">
+              llms.txt
+            </a>
+            ).
+          </div>
+        </div>
+
         <div className="mt-4 flex justify-end">
           <button onClick={() => void rotate()} disabled={rotating} className="btn-secondary">
             {rotating ? 'Rotating…' : 'Regenerate key'}

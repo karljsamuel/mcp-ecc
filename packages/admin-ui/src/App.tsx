@@ -21,10 +21,14 @@ export function useToasts() {
 }
 
 function RequireAuth({ children }: { children: JSX.Element }) {
-  const { user, loading } = useAuth();
+  const { user, loading, needsBootstrap } = useAuth();
   const location = useLocation();
   if (loading) return null;
-  if (!user) return <Navigate to="/login" replace state={{ from: location }} />;
+  if (!user) {
+    // Fresh install with no admin: go to the create-admin screen.
+    if (needsBootstrap) return <Navigate to="/bootstrap" replace />;
+    return <Navigate to="/login" replace state={{ from: location }} />;
+  }
   return children;
 }
 
