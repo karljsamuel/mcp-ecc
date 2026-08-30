@@ -28,6 +28,11 @@ ENV MCP_STORAGE_FILE=/data/mcp-ecc.db
 ENV PORT=3001
 ENV HOST=0.0.0.0
 
+# OCI metadata (shown on GHCR and Docker Hub overview)
+LABEL org.opencontainers.image.title="mcp-ecc"
+LABEL org.opencontainers.image.description="MCP server for Email, Calendar & Contacts — Google, Microsoft 365, Zoho, IMAP/SMTP, CalDAV, CardDAV. Multi-user admin UI and per-user MCP API keys."
+LABEL org.opencontainers.image.licenses="MIT"
+
 RUN addgroup --system --gid 1001 nodejs \
   && adduser --system --uid 1001 mcp-ecc \
   && apk add --no-cache python3 make g++
