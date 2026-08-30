@@ -1,57 +1,35 @@
 <div align="center">
 
-# 📨 mcp-ecc
+# mcp-ecc
 
-**Email · Calendar · Contacts — one MCP server**
+### Email · Calendar · Contacts — one MCP server for all your accounts
 
-A Model Context Protocol (MCP) server that aggregates email, calendar and contacts from Google, Microsoft 365/Outlook, Zoho, IMAP/SMTP, CalDAV and CardDAV into a single interface for AI agents.
+A Model Context Protocol (MCP) server that lets AI assistants read, write and manage your **email, calendar and contacts** — across **Google, Microsoft 365/Outlook, Zoho, and any IMAP/SMTP, CalDAV or CardDAV account** — from a single interface.
 
-</div>
-
-<div align="center">
-
-| | |
-|---|---|
-| **🪪 Licence** | MIT |
-| **🗣 Language** | TypeScript |
-| **🔖 Version** | v0.3.1-beta.1 |
-| **🟢 Node** | 24+ (LTS) |
-| **🐳 Images** | `karljsamuel/mcp-ecc:beta` · `ghcr.io/karljsamuel/mcp-ecc:beta` |
-| **📦 npm** | `@karljsamuel/mcp-ecc` |
-
-</div>
-
-<div align="center">
-
-[![MIT license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![TypeScript](https://img.shields.io/badge/language-TypeScript-3178c6.svg)](#)
-[![Version](https://img.shields.io/badge/version-0.3.1--beta.1-purple.svg)](#)
-[![Node](https://img.shields.io/badge/node-24-green.svg)](#)
-[![Multi-arch](https://img.shields.io/badge/multi--arch-amd64%20%7C%20arm64-blueviolet.svg)](#)
+![License](https://img.shields.io/badge/license-MIT-blue?logo=open-source-initiative&logoColor=white)
+![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)
+![Version](https://img.shields.io/badge/version-0.3.1--beta.1-purple)
+![Node](https://img.shields.io/badge/node-%3E%3D24-339933?logo=nodedotjs&logoColor=white)
+![MCP](https://img.shields.io/badge/Model%20Context%20Protocol-black)
+![Docker](https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white)
+![Multi-arch](https://img.shields.io/badge/arch-amd64%20%7C%20arm64-lightgrey)
 
 </div>
 
 ---
 
-<div align="center">
+**mcp-ecc** aggregates your mail, calendar and contacts into standardised MCP tools (`mail.*`, `calendar.*`, `contacts.*`, `accounts.*`) so any MCP client — Claude, Cursor, and others — can work with all of them uniformly.
 
-**One OAuth consent** per cloud provider covers mail + calendar + contacts. Tokens are encrypted at rest (AES-256-GCM). A **multi-user** server: each user self-manages their own provider accounts and connects with their **own per-user MCP API key**.
-
-</div>
-
-## ✨ Highlights
-
-- **Multi-user** — first-run admin bootstrap, admin/user roles, session login, per-user API keys.
-- **Per-account OAuth clients** — client IDs/secrets stored per account (personal, org-A, org-B), not in `.env`.
-- **Provider coverage** — Google, Microsoft 365/Outlook, Zoho, IMAP/SMTP, CalDAV, CardDAV.
-- **Admin web UI** — manage accounts (auth + health badges), users, OAuth clients, settings.
-- **Self-hostable** — single container serving web UI + REST + MCP on one port.
+- **One OAuth consent** per cloud provider covers mail + calendar + contacts
+- **Multi-user** — users self-manage their own accounts, each with a per-user MCP API key
+- **Credentials encrypted at rest** (AES-256-GCM)
+- **Self-hostable** — single container serving a web admin UI, REST API and the MCP endpoint on one port
 
 ---
 
-## 🚀 Quick start
+## Quick start
 
-### Docker (recommended)
+### Docker
 
 ```bash
 docker run -d --name mcp-ecc \
@@ -60,7 +38,7 @@ docker run -d --name mcp-ecc \
   karljsamuel/mcp-ecc:beta
 ```
 
-Open **http://localhost:3001** → create the first admin account, add an OAuth client, add an account.
+Open **http://localhost:3001** → create the admin account → add your provider accounts.
 
 ### From source
 
@@ -69,18 +47,14 @@ git clone https://github.com/karljsamuel/mcp-ecc.git
 cd mcp-ecc
 npm install
 npm run build
+npm run cli -- start
 ```
 
 ---
 
-## 🔌 Connecting an agent
+## Connecting an MCP client
 
-Point your MCP client at the authenticated endpoint (per-user API key):
-
-```text
-Endpoint : http://<host>:3001/mcp
-Auth     : Authorization: Bearer <your-mcp-api-key>
-```
+Point your client at the HTTP endpoint with your per-user API key (shown in the web UI under **Settings**):
 
 ```json
 {
@@ -88,43 +62,34 @@ Auth     : Authorization: Bearer <your-mcp-api-key>
     "mcp-ecc": {
       "type": "http",
       "url": "http://localhost:3001/mcp",
-      "headers": { "Authorization": "Bearer <your-mcp-api-key>" }
+      "headers": { "Authorization": "Bearer <your-api-key>" }
     }
   }
 }
 ```
 
-Agents can read the [SKILL.md](SKILL.md) runbook and [llms.txt](llms.txt) for a guided setup.
+Agents can read [`SKILL.md`](SKILL.md) or [`llms.txt`](llms.txt) for guided, automated setup.
 
 ---
 
-## 🧭 Documentation
+## Providers
 
-| Area | Guides |
-|------|--------|
-| **Getting started** | [Overview](docs/README.md) · [Auth & users](docs/auth-users.md) · [Account identity](docs/accounts-identity.md) |
-| **Deployment** | [CLI](docs/deployment-cli.md) · [Docker](docs/deployment-docker.md) · [Cloudflare Workers](docs/deployment-cloudflare-workers.md) |
-| **Providers** | [Google](docs/providers-google.md) · [Microsoft 365](docs/providers-microsoft.md) · [Zoho](docs/providers-zoho.md) · [IMAP/SMTP](docs/providers-imap-smtp.md) · [CalDAV/CardDAV](docs/providers-caldav-carddav.md) |
-| **Reference** | [MCP tools](docs/mcp-tools.md) · [SKILL.md](SKILL.md) · [llms.txt](llms.txt) |
-
-### Provider coverage
-
-| Provider | Mail | Calendar | Contacts | Auth | Deployable on |
-|----------|:---:|:---:|:---:|------|---------------|
-| Google | ✅ | ✅ | ✅ | OAuth 2.0 | CLI · Docker · Workers |
-| Microsoft 365/Outlook | ✅ | ✅ | ✅ | OAuth 2.0 | CLI · Docker · Workers |
-| Zoho | ✅ | ✅ | ✅ | OAuth 2.0 | CLI · Docker · Workers |
-| IMAP / SMTP | ✅ | ❌ | ❌ | App password | CLI · Docker |
-| CalDAV | ❌ | ✅ | ❌ | Password | CLI · Docker |
-| CardDAV | ❌ | ❌ | ✅ | Password | CLI · Docker |
+| Provider | Mail | Calendar | Contacts | Authentication |
+|----------|:---:|:---:|:---:|------|
+| **Google** (Gmail, Calendar, People) | ✅ | ✅ | ✅ | OAuth 2.0 |
+| **Microsoft 365 / Outlook** (Graph) | ✅ | ✅ | ✅ | OAuth 2.0 |
+| **Zoho** (Mail, Calendar, Contacts) | ✅ | ✅ | ✅ | OAuth 2.0 |
+| **IMAP / SMTP** (any mail server) | ✅ | ❌ | ❌ | App password |
+| **CalDAV** (Nextcloud, Radicale, BAIKAL) | ❌ | ✅ | ❌ | Password |
+| **CardDAV** | ❌ | ❌ | ✅ | Password |
 
 > **Microsoft 365:** app passwords are being retired — use OAuth (Microsoft Graph) only.
 
+Deployment notes: Google/Microsoft/Zoho run everywhere; IMAP/SMTP, CalDAV and CardDAV require a Node.js runtime (CLI or Docker), not Cloudflare Workers.
+
 ---
 
-## 🧰 MCP tools
-
-Namespaced: **`mail.*`**, **`calendar.*`**, **`contacts.*`**, **`accounts.*`**.
+## MCP tools
 
 ```text
 mail.listFolders · mail.listMessages · mail.getMessage · mail.sendMessage
@@ -139,45 +104,24 @@ contacts.delete · contacts.search
 accounts.list · accounts.get · accounts.add · accounts.remove · accounts.sync
 ```
 
-Full reference with input schemas: [`docs/mcp-tools.md`](docs/mcp-tools.md).
+Full reference with input schemas: [`docs/mcp-tools.md`](docs/mcp-tools.md)
 
 ---
 
-## 📦 Deployment modes
+## Documentation
 
-| Mode | Runtime | Storage | Best for |
-|------|---------|---------|----------|
-| **Local / CLI** | Node.js 24+ | SQLite / in-memory | Single-user stdio agent hosts |
-| **Docker (single container)** | Container | SQLite (volume) | Self-hosted web UI + REST + MCP |
-| **Cloudflare Workers** | Edge / serverless | D1 | Global HTTP endpoint (HTTP providers only) |
-
----
-
-## 🏗 Monorepo layout
-
-```
-packages/
-├── core/              # Types, storage interface, OAuth/Auth managers
-├── storage/           # sqlite · d1 · memory adapters
-├── providers/         # google · microsoft · zoho · imap-smtp · caldav · carddav
-├── mcp-server/        # MCP tools, resources, prompts
-├── management-api/    # Fastify REST + admin UI
-├── admin-ui/          # React web app
-├── cli/               # mcp-ecc command-line tool
-└── workers-entry/     # Cloudflare Workers (Hono)
-```
+- **[Getting started](docs/README.md)** — overview and quick start
+- **[Auth & users](docs/auth-users.md)** — multi-user model, bootstrap, per-user API keys
+- **[Accounts & identity](docs/accounts-identity.md)** — name vs slug
+- **Deployment** — [CLI](docs/deployment-cli.md) · [Docker](docs/deployment-docker.md) · [Cloudflare Workers](docs/deployment-cloudflare-workers.md)
+- **Providers** — [Google](docs/providers-google.md) · [Microsoft 365](docs/providers-microsoft.md) · [Zoho](docs/providers-zoho.md) · [IMAP/SMTP](docs/providers-imap-smtp.md) · [CalDAV/CardDAV](docs/providers-caldav-carddav.md)
 
 ---
 
-## 🤝 Contributing
+## Contributing
 
-- Feature branches off `dev`; PRs against `dev`.
-- `npm run build` compiles all packages; keep `Changelog.md` and `docs/` in sync.
+Feature branches off `dev`; PRs against `dev`. Run `npm run build` to compile all packages. Keep `Changelog.md` and `docs/` in sync.
 
-## 📄 Licence
+## License
 
 [MIT](LICENSE) © 2026 Karl J Samuel
-
----
-
-**Note:** CalDAV/CardDAV adapters are scaffolded; Cloudflare Workers supports HTTP-API providers only.
