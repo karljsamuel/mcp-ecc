@@ -174,7 +174,11 @@ export class OAuthManager {
       });
 
       if (!response.ok) {
-        throw new AuthError('Failed to initiate Google device flow');
+        let errDetail = '';
+        try {
+          errDetail = ` - ${await response.text()}`;
+        } catch {}
+        throw new AuthError(`Failed to initiate Google device flow: ${response.status} ${response.statusText}${errDetail}`);
       }
 
       const data: any = await response.json();
@@ -226,7 +230,11 @@ export class OAuthManager {
       );
 
       if (!response.ok) {
-        throw new AuthError('Failed to initiate Microsoft device flow');
+        let errDetail = '';
+        try {
+          errDetail = ` - ${await response.text()}`;
+        } catch {}
+        throw new AuthError(`Failed to initiate Microsoft device flow: ${response.status} ${response.statusText}${errDetail}`);
       }
 
       const data: any = await response.json();

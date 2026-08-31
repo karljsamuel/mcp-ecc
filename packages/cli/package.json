@@ -28,6 +28,7 @@
   "dependencies": {
     "@mcp-ecc/core": "file:../core",
     "@mcp-ecc/storage-memory": "file:../storage-memory",
+    "@mcp-ecc/storage-sqlite": "file:../storage/sqlite",
     "@mcp-ecc/mcp-server": "file:../mcp-server",
     "commander": "^15.0.0",
     "chalk": "^6.0.0",
