@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import 'dotenv/config';
-import { join } from 'path';
+import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { dirname } from 'path';
+import { existsSync, mkdirSync } from 'fs';
 import { ManagementApi } from './index.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -20,7 +20,13 @@ let storageName = 'sqlite';
 try {
   const { SQLiteStorage } = await import('@mcp-ecc/storage-sqlite');
   const STORAGE_FILE = process.env.MCP_STORAGE_FILE || join(process.cwd(), 'data', 'mcp-ecc.db');
+  const dbDir = dirname(STORAGE_FILE);
+  if (!existsSync(dbDir)) {
+    mkdirSync(dbDir, { recursive: true });
+    console.log(`[mcp-ecc] Created database directory at ${dbDir}`);
+  }
   storage = new SQLiteStorage(STORAGE_FILE, ENCRYPTION_KEY);
+  console.log(`[mcp-ecc] SQLite storage initialized at ${STORAGE_FILE}`);
 } catch (e: any) {
   const { MemoryStorage } = await import('@mcp-ecc/storage-memory');
   storage = new MemoryStorage();

@@ -309,7 +309,7 @@ async function handleEditAccount(accountId: string): Promise<void> {
 program
   .name('mcp-ecc')
   .description('MCP Email, Calendar, and Contacts Server')
-  .version('0.1.0');
+  .version('0.3.1-beta.1');
 
 program
   .command('start')

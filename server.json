@@ -10,7 +10,7 @@
   "packages": [
     {
       "registryType": "npm",
-      "identifier": "@karljsamuel/mcp-ecc",
+      "identifier": "mcp-ecc",
       "version": "0.3.1-beta.1",
       "transport": {
         "type": "stdio"
@@ -19,7 +19,7 @@
         "command": "npx",
         "args": [
           "-y",
-          "@karljsamuel/mcp-ecc"
+          "mcp-ecc"
         ]
       },
       "environmentVariables": [
