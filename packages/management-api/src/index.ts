@@ -211,6 +211,32 @@ export class ManagementApi {
         createdAt: Date.now(), updatedAt: Date.now(),
       };
       await this.storage.saveAccount(account);
+
+      // If OAuth provider, automatically initiate auth flow and return device code instructions
+      if (AUTH_PROVIDERS.includes(provider)) {
+        let oauthClient: OAuthClient | null = null;
+        if (credentials.oauthClientId) {
+          oauthClient = await this.storage.getOAuthClient(credentials.oauthClientId);
+        }
+        if (!oauthClient) {
+          const clients = await this.storage.listOAuthClients(ownerId);
+          oauthClient = clients.find((c) => c.provider === provider && c.enabled) || null;
+        }
+        if (oauthClient) {
+          const redirectUri = `${this.publicUrl}/oauth/callback`;
+          const flow = await this.oauthManager.startFlow(provider as ProviderName, 'device_code', OAuthManager.clientToConfig(oauthClient, redirectUri));
+          await this.storage.updateCredentials(account.id, { oauthClientId: oauthClient.id });
+          return reply.code(201).send({
+            account: { id: account.id, slug: account.slug, name: account.name },
+            authorizeUrl: flow.verificationUri,
+            verificationUri: flow.verificationUri,
+            userCode: flow.userCode,
+            deviceCode: flow.deviceCode,
+            message: `Account created. Go to ${flow.verificationUri} and enter code: ${flow.userCode}`,
+          });
+        }
+      }
+
       return reply.code(201).send({ account: { id: account.id, slug: account.slug, name: account.name } });
     });
 
@@ -254,7 +280,7 @@ export class ManagementApi {
       const flow = await this.oauthManager.startFlow(account.provider as ProviderName, 'device_code', OAuthManager.clientToConfig(client, redirectUri));
       // Persist the chosen client on the account for later token refresh.
       await this.storage.updateCredentials(account.id, { oauthClientId: client.id });
-      return { verificationUri: flow.verificationUri, userCode: flow.userCode, deviceCode: flow.deviceCode, interval: flow.interval, state: flow.state };
+      return { authorizeUrl: flow.verificationUri, verificationUri: flow.verificationUri, userCode: flow.userCode, deviceCode: flow.deviceCode, interval: flow.interval, state: flow.state, message: `Go to ${flow.verificationUri} and enter code: ${flow.userCode}` };
     });
 
     // OAuth callback completes a flow and stores tokens on the pending account.
