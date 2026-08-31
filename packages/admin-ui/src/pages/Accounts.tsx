@@ -222,12 +222,10 @@ function CreateAccountModal({
     infoApi.fetch().then(setServerInfo).catch(() => setServerInfo(null));
   }, []);
 
-  // When the provider changes, if it has no saved clients, force "new credentials".
   useEffect(() => {
-    if (providerClients.length === 0) setUseSavedClient(false);
-    else setUseSavedClient(true);
+    setUseSavedClient(true);
     setSelectedClientId('');
-  }, [provider, providerClients]);
+  }, [provider]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -315,24 +313,37 @@ function CreateAccountModal({
               </div>
             )}
 
-            {providerClients.length > 0 && (
+            <div className="flex gap-4">
               <label className="flex items-center gap-2 text-sm text-slate-700">
                 <input
                   type="radio"
+                  name="clientMode"
                   checked={useSavedClient}
                   onChange={() => setUseSavedClient(true)}
                   className="accent-indigo-600"
                 />
-                Use a saved client
+                Use existing client
               </label>
-            )}
-            {useSavedClient && providerClients.length > 0 ? (
+              <label className="flex items-center gap-2 text-sm text-slate-700">
+                <input
+                  type="radio"
+                  name="clientMode"
+                  checked={!useSavedClient}
+                  onChange={() => setUseSavedClient(false)}
+                  className="accent-indigo-600"
+                />
+                Enter new credentials
+              </label>
+            </div>
+
+            {useSavedClient ? (
               <select
                 className="input"
                 value={selectedClientId}
                 onChange={(e) => setSelectedClientId(e.target.value)}
+                required={useSavedClient}
               >
-                <option value="">Select a client…</option>
+                <option value="">Select an existing client…</option>
                 {providerClients.map((c) => (
                   <option key={c.id} value={c.id}>
                     {c.label} ({c.clientId})
@@ -341,17 +352,6 @@ function CreateAccountModal({
               </select>
             ) : (
               <div className="space-y-2">
-                {providerClients.length > 0 && (
-                  <label className="flex items-center gap-2 text-sm text-slate-700">
-                    <input
-                      type="radio"
-                      checked={!useSavedClient}
-                      onChange={() => setUseSavedClient(false)}
-                      className="accent-indigo-600"
-                    />
-                    Enter new client credentials
-                  </label>
-                )}
                 <input className="input" value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Client label (e.g. Personal)" />
                 <input className="input" value={clientId} onChange={(e) => setClientId(e.target.value)} placeholder="Client ID" required={!useSavedClient} />
                 <input className="input" type="password" value={clientSecret} onChange={(e) => setClientSecret(e.target.value)} placeholder="Client secret" />
