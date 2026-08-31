@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-08-30
+
+### Added
+- Public `GET /api/bootstrap-status` and `GET /api/info` endpoints (redirect URI + MCP endpoint for the UI).
+- Serve `SKILL.md` and `llms.txt` at `GET /setup/skill.md` and `GET /setup/llms.txt`.
+- Settings page "MCP connection" panel: endpoint, copyable client-config JSON, per-user API key, SKILL.md/llms.txt links.
+- Add-Account modal: select-or-create OAuth client, inline client credentials, and display of the OAuth redirect URI.
+- MIT licence (`LICENSE`) + licence field across all packages; OCI description/licence labels on the Docker image.
+- Docker Hub overview sync: publish workflow pushes the README as the repository description.
+
+### Changed
+- Merge IMAP/SMTP into a single "IMAP/SMTP" provider option (was two).
+- Rewrite README for public audiences (shields.io badges, concise sections).
+- Upgrade GitHub Actions to Node-24-native versions (checkout@v5, docker/*@v4/v6).
+
+### Fixed
+- Bootstrap flow: fresh install now routes to a "create admin" screen instead of a bare login.
+- Hard-gate `/api/auth/bootstrap` — returns 400 once an admin exists (no self-registration).
+- Settings page crash ("Cannot read properties of undefined (reading 'displayName')") — `/api/settings/me` now returns the `{settings, mcpApiKey}` shape.
+
 ## [0.3.0] - 2026-08-30
 
 ### Added

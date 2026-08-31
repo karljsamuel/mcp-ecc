@@ -1,6 +1,6 @@
 {
   "name": "@mcp-ecc/management-api",
-  "version": "0.3.0",
+  "version": "0.3.1-beta.1",
   "description": "Management API for mcp-ecc",
   "type": "module",
   "main": "dist/index.js",

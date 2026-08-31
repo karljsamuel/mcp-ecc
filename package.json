@@ -1,6 +1,6 @@
 {
   "name": "mcp-ecc",
-  "version": "0.3.0",
+  "version": "0.3.1-beta.1",
   "description": "MCP Server for Email, Calendar, and Contacts with Headless OAuth Support",
   "private": true,
   "workspaces": [
