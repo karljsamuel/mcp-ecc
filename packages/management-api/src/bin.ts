@@ -14,9 +14,7 @@ const PUBLIC_URL = process.env.PUBLIC_URL || process.env.BASE_URL || `http://loc
 const SESSION_SECRET = process.env.SESSION_SECRET;
 const ENCRYPTION_KEY = process.env.MCP_ENCRYPTION_KEY;
 
-// Storage: prefer SQLite (persistent) when the native module is available,
-// otherwise fall back to in-memory. The SQLite adapter is imported lazily so a
-// missing native `better-sqlite3` binary does not crash startup.
+// Storage: SQLite is required.
 let storage;
 let storageName = 'sqlite';
 try {
@@ -24,10 +22,8 @@ try {
   const STORAGE_FILE = process.env.MCP_STORAGE_FILE || join(process.cwd(), 'data', 'mcp-ecc.db');
   storage = new SQLiteStorage(STORAGE_FILE, ENCRYPTION_KEY);
 } catch (e: any) {
-  const { MemoryStorage } = await import('@mcp-ecc/storage-memory');
-  storage = new MemoryStorage();
-  storageName = 'memory';
-  console.warn(`SQLite storage unavailable, falling back to in-memory: ${e.message}`);
+  console.error(`CRITICAL: Failed to load SQLite storage: ${e.message}`);
+  throw e;
 }
 
 // Bootstrap guidance: if no users exist, the web UI shows the create-admin screen.
