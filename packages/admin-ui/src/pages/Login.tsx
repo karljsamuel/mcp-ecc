@@ -85,10 +85,14 @@ export function Login({ push }: { push: ToastPush }) {
         </form>
 
         <div className="mt-6 text-center text-sm text-slate-500">
-          First time running mcp-ecc?{' '}
-          <Link to="/bootstrap" className="font-medium text-indigo-600 hover:text-indigo-700">
-            Create the admin account
-          </Link>
+          {needsBootstrap && (
+            <span>
+              No admin account found.{' '}
+              <Link to="/bootstrap" className="font-medium text-indigo-600 hover:text-indigo-700">
+                Create the first admin account
+              </Link>
+            </span>
+          )}
         </div>
       </div>
     </div>

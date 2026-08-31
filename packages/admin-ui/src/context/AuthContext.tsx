@@ -78,10 +78,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const logout = useCallback(async () => {
+    // Clear local state first so the UI immediately reflects signed-out.
+    setUser(null);
+    setNeedsBootstrap(false);
     try {
       await authApi.logout();
     } finally {
-      setUser(null);
       navigate('/login', { replace: true });
     }
   }, [navigate]);

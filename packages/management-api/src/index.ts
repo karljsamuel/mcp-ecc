@@ -366,24 +366,32 @@ export class ManagementApi {
     });
 
     // --- Public setup docs (for AI agents to self-configure) ---
-    this.app.get('/setup/skill.md', async (_request: any, reply: any) => {
-      try {
-        const p = join(__dirname, '../../..', 'SKILL.md');
-        const text = this.readIfExists(p);
-        return reply.type('text/markdown').send(text);
-      } catch {
-        return reply.code(404).send('SKILL.md not found');
+    const APP_ROOT = join(__dirname, '..', '..', '..');
+    const PUBLIC_DIR = this.config.publicDir;
+
+    const resolveDoc = (filename: string): string | null => {
+      const candidates = [
+        join(APP_ROOT, filename),
+        join(PUBLIC_DIR, '..', filename),
+        join(PUBLIC_DIR, '..', '..', filename),
+        join(process.cwd(), filename),
+      ];
+      for (const p of candidates) {
+        try { return readFileSync(p, 'utf8'); } catch { /* continue */ }
       }
+      return null;
+    };
+
+    this.app.get('/setup/skill.md', async (_request: any, reply: any) => {
+      const text = resolveDoc('SKILL.md');
+      if (!text) return reply.code(404).send('SKILL.md not found');
+      return reply.type('text/markdown').send(text);
     });
 
     this.app.get('/setup/llms.txt', async (_request: any, reply: any) => {
-      try {
-        const p = join(__dirname, '../../..', 'llms.txt');
-        const text = this.readIfExists(p);
-        return reply.type('text/plain').send(text);
-      } catch {
-        return reply.code(404).send('llms.txt not found');
-      }
+      const text = resolveDoc('llms.txt');
+      if (!text) return reply.code(404).send('llms.txt not found');
+      return reply.type('text/plain').send(text);
     });
 
     // --- SPA fallback (public UI; 404 fix) ---

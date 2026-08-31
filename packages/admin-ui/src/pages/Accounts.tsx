@@ -206,6 +206,8 @@ function CreateAccountModal({
   const [error, setError] = useState<string | null>(null);
 
   // OAuth credential selection/creation state
+  const providerClients = useMemo(() => oauthClients.filter((c) => c.provider === provider), [oauthClients, provider]);
+  // Default: use a saved client if one exists, else enter new credentials.
   const [useSavedClient, setUseSavedClient] = useState(true);
   const [selectedClientId, setSelectedClientId] = useState('');
   const [label, setLabel] = useState('');
@@ -220,7 +222,12 @@ function CreateAccountModal({
     infoApi.fetch().then(setServerInfo).catch(() => setServerInfo(null));
   }, []);
 
-  const providerClients = useMemo(() => oauthClients.filter((c) => c.provider === provider), [oauthClients, provider]);
+  // When the provider changes, if it has no saved clients, force "new credentials".
+  useEffect(() => {
+    if (providerClients.length === 0) setUseSavedClient(false);
+    else setUseSavedClient(true);
+    setSelectedClientId('');
+  }, [provider, providerClients]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
