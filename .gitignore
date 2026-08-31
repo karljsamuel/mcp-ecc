@@ -2,6 +2,9 @@ node_modules/
 dist/
 config.json
 .env
+data/
+*.db
+*.sqlite
 .mcp-tokens.json
 E:\\WebDesignProjects\\mcp-email-calendar-contacts\\config.json
 npm-debug.log*
