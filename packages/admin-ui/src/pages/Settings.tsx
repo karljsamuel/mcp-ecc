@@ -17,15 +17,23 @@ export function Settings({ push }: { push: ToastPush }) {
   const endpoint = typeof window !== 'undefined' ? `${window.location.origin}/mcp` : '/mcp';
 
   const [displayName, setDisplayName] = useState('');
-  const [currentPassword, setCurrentPassword] = useState('');
-  const [newPassword, setNewPassword] = useState('');
   const [savingProfile, setSavingProfile] = useState(false);
   const [rotating, setRotating] = useState(false);
 
+  // Change password modal state
+  const [showPasswordModal, setShowPasswordModal] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [changingPassword, setChangingPassword] = useState(false);
+  const [passwordError, setPasswordError] = useState<string | null>(null);
+
   const load = useCallback(async () => {
     try {
-      const { settings } = await settingsApi.me();
-      setData(settings);
+      const res = await settingsApi.me();
+      const settings = res.settings;
+      const mcpApiKey = res.mcpApiKey ?? settings?.mcpApiKey;
+      setData({ ...settings, mcpApiKey });
       setDisplayName(settings.displayName ?? '');
       setError(null);
     } catch (e) {
@@ -42,25 +50,39 @@ export function Settings({ push }: { push: ToastPush }) {
     setError(null);
     setSavingProfile(true);
     try {
-      const patch: { displayName?: string; currentPassword?: string; newPassword?: string } = {
-        displayName,
-      };
-      if (newPassword) {
-        if (!currentPassword) {
-          throw new Error('Current password is required to change your password.');
-        }
-        patch.currentPassword = currentPassword;
-        patch.newPassword = newPassword;
-      }
-      const { settings } = await settingsApi.update(patch);
+      const { settings } = await settingsApi.update({ displayName });
       setData((prev) => ({ ...prev, ...settings }));
-      setCurrentPassword('');
-      setNewPassword('');
-      push('Settings saved', 'success');
+      push('Profile updated', 'success');
     } catch (err) {
       setError((err as Error).message);
     } finally {
       setSavingProfile(false);
+    }
+  };
+
+  const changePassword = async (e: FormEvent) => {
+    e.preventDefault();
+    setPasswordError(null);
+    if (newPassword !== confirmPassword) {
+      setPasswordError('New passwords do not match');
+      return;
+    }
+    if (newPassword.length < 8) {
+      setPasswordError('New password must be at least 8 characters');
+      return;
+    }
+    setChangingPassword(true);
+    try {
+      await settingsApi.update({ currentPassword, newPassword });
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+      setShowPasswordModal(false);
+      push('Password changed successfully', 'success');
+    } catch (err) {
+      setPasswordError((err as Error).message);
+    } finally {
+      setChangingPassword(false);
     }
   };
 
@@ -70,11 +92,7 @@ export function Settings({ push }: { push: ToastPush }) {
     try {
       const res = await settingsApi.rotateApiKey();
       const key = res.mcpApiKey ?? res.settings?.mcpApiKey;
-      if (key !== undefined) {
-        setData((prev) => ({ ...prev, ...res.settings, mcpApiKey: key }));
-      } else {
-        setData((prev) => ({ ...prev, ...res.settings }));
-      }
+      setData((prev) => ({ ...prev, ...res.settings, mcpApiKey: key }));
       push('MCP API key rotated', 'success');
     } catch (err) {
       setError((err as Error).message);
@@ -103,9 +121,24 @@ export function Settings({ push }: { push: ToastPush }) {
       {error && <Alert tone="error">{error}</Alert>}
 
       {/* Profile */}
-      <form onSubmit={saveProfile} className="card p-6">
-        <h2 className="mb-4 text-base font-semibold text-slate-900">Profile</h2>
-        <div className="space-y-4">
+      <div className="card p-6">
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="text-base font-semibold text-slate-900">Profile</h2>
+          <button
+            type="button"
+            onClick={() => {
+              setPasswordError(null);
+              setCurrentPassword('');
+              setNewPassword('');
+              setConfirmPassword('');
+              setShowPasswordModal(true);
+            }}
+            className="btn-secondary text-xs"
+          >
+            Change password
+          </button>
+        </div>
+        <form onSubmit={saveProfile} className="space-y-4">
           <div>
             <label className="label">Username</label>
             <input className="input bg-slate-50 text-slate-500" value={data.username ?? ''} disabled readOnly />
@@ -119,38 +152,73 @@ export function Settings({ push }: { push: ToastPush }) {
               required
             />
           </div>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <div>
-              <label className="label">Current password</label>
-              <input
-                className="input"
-                type="password"
-                autoComplete="current-password"
-                value={currentPassword}
-                onChange={(e) => setCurrentPassword(e.target.value)}
-                placeholder="Required to change password"
-              />
-            </div>
-            <div>
-              <label className="label">New password</label>
-              <input
-                className="input"
-                type="password"
-                autoComplete="new-password"
-                value={newPassword}
-                onChange={(e) => setNewPassword(e.target.value)}
-                minLength={8}
-                placeholder="Leave blank to keep current"
-              />
-            </div>
-          </div>
           <div className="flex justify-end">
             <button type="submit" disabled={savingProfile} className="btn-primary">
               {savingProfile ? 'Saving…' : 'Save changes'}
             </button>
           </div>
+        </form>
+      </div>
+
+      {/* Change Password Modal */}
+      {showPasswordModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
+            <h3 className="mb-4 text-lg font-bold text-slate-900">Change Password</h3>
+            {passwordError && <div className="mb-4"><Alert tone="error">{passwordError}</Alert></div>}
+            <form onSubmit={changePassword} className="space-y-4">
+              <div>
+                <label className="label">Current password</label>
+                <input
+                  className="input"
+                  type="password"
+                  autoComplete="current-password"
+                  value={currentPassword}
+                  onChange={(e) => setCurrentPassword(e.target.value)}
+                  required
+                />
+              </div>
+              <div>
+                <label className="label">New password</label>
+                <input
+                  className="input"
+                  type="password"
+                  autoComplete="new-password"
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  minLength={8}
+                  required
+                />
+              </div>
+              <div>
+                <label className="label">Confirm new password</label>
+                <input
+                  className="input"
+                  type="password"
+                  autoComplete="new-password"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  minLength={8}
+                  required
+                />
+              </div>
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowPasswordModal(false)}
+                  className="btn-secondary"
+                  disabled={changingPassword}
+                >
+                  Cancel
+                </button>
+                <button type="submit" className="btn-primary" disabled={changingPassword}>
+                  {changingPassword ? 'Updating…' : 'Update password'}
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
-      </form>
+      )}
 
       {/* MCP API key + connection */}
       <div className="card p-6">

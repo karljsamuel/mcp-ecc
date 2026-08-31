@@ -28,8 +28,10 @@ const SESSION_COOKIE = 'mcp_ecc_session';
 const AUTH_PROVIDERS: ProviderName[] = ['google', 'microsoft', 'zoho'];
 
 // Strip secret fields before returning an entity to clients.
-function publicUser(u: User) {
-  return { id: u.id, username: u.username, displayName: u.displayName, role: u.role };
+function publicUser(u: User, includeApiKey = false) {
+  const base: any = { id: u.id, username: u.username, displayName: u.displayName, role: u.role };
+  if (includeApiKey && u.mcpApiKey) base.mcpApiKey = u.mcpApiKey;
+  return base;
 }
 function publicClient(c: OAuthClient) {
   return { id: c.id, provider: c.provider, label: c.label, clientId: c.clientId, scopes: c.scopes, tenantId: c.tenantId, accountsServer: c.accountsServer, enabled: c.enabled };
@@ -292,7 +294,7 @@ export class ManagementApi {
     this.app.get('/api/users', async (request: any, reply: any) => {
       if (request.user.role !== 'admin') return reply.code(403).send({ error: 'Admin only' });
       const users = await this.storage.listUsers();
-      return { users: users.map(publicUser) };
+      return { users: users.map((u) => publicUser(u, false)) };
     });
 
     this.app.post('/api/users', async (request: any, reply: any) => {
@@ -336,33 +338,34 @@ export class ManagementApi {
     });
 
     // --- Settings (own user) ---
-        this.app.get('/api/settings/me', async (request: any) => {
-          const user = await this.storage.getUser(request.user.id);
-          if (!user) return { error: 'User not found' };
-          return { settings: publicUser(user), mcpApiKey: user.mcpApiKey };
-        });
+    this.app.get('/api/settings/me', async (request: any) => {
+      const user = await this.storage.getUser(request.user.id);
+      if (!user) return { error: 'User not found' };
+      return { settings: publicUser(user, true), mcpApiKey: user.mcpApiKey };
+    });
 
-        this.app.patch('/api/settings/me', async (request: any, reply: any) => {
-          const { displayName, currentPassword, newPassword } = request.body;
-          if (newPassword) {
-            if (!currentPassword) return reply.code(400).send({ error: 'currentPassword required to change password' });
-            try {
-              await this.authService.changePassword(request.user.id, currentPassword, newPassword);
-            } catch (e: any) {
-              return reply.code(400).send({ error: e.message });
-            }
-          }
-          if (displayName !== undefined) {
-            await this.storage.updateUser(request.user.id, { displayName });
-          }
-          const user = await this.storage.getUser(request.user.id);
-          if (!user) return reply.code(404).send({ error: 'User not found' });
-          return { settings: publicUser(user), mcpApiKey: user.mcpApiKey };
-        });
+    this.app.patch('/api/settings/me', async (request: any, reply: any) => {
+      const { displayName, currentPassword, newPassword } = request.body;
+      if (newPassword) {
+        if (!currentPassword) return reply.code(400).send({ error: 'currentPassword required to change password' });
+        try {
+          await this.authService.changePassword(request.user.id, currentPassword, newPassword);
+        } catch (e: any) {
+          return reply.code(400).send({ error: e.message });
+        }
+      }
+      if (displayName !== undefined) {
+        await this.storage.updateUser(request.user.id, { displayName });
+      }
+      const user = await this.storage.getUser(request.user.id);
+      if (!user) return reply.code(404).send({ error: 'User not found' });
+      return { settings: publicUser(user, true), mcpApiKey: user.mcpApiKey };
+    });
 
     this.app.post('/api/settings/me/rotate-apikey', async (request: any) => {
       const key = await this.authService.rotateApiKey(request.user.id);
-      return { mcpApiKey: key };
+      const user = await this.storage.getUser(request.user.id);
+      return { settings: user ? publicUser(user, true) : undefined, mcpApiKey: key };
     });
 
     // --- Public setup docs (for AI agents to self-configure) ---

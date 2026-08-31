@@ -184,7 +184,7 @@ export interface Settings {
 }
 
 export const settingsApi = {
-  me: () => get<{ settings: Settings }>('/api/settings/me'),
+  me: () => get<{ settings: Settings; mcpApiKey?: string }>('/api/settings/me'),
   update: (patch: { displayName?: string; currentPassword?: string; newPassword?: string }) =>
     send<{ settings: Settings }>('/api/settings/me', 'PATCH', patch),
   rotateApiKey: () => send<{ settings: Settings; mcpApiKey?: string }>('/api/settings/me/rotate-apikey', 'POST', {}),
