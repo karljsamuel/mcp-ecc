@@ -132,7 +132,7 @@ export class ManagementApi {
     this.app.post('/api/auth/logout', async (request: any, reply: any) => {
       const token = request.cookies?.[SESSION_COOKIE];
       if (token) sessions.delete(token);
-      reply.clearCookie(SESSION_COOKIE, { path: '/' });
+      reply.clearCookie(SESSION_COOKIE, { path: '/', httpOnly: true, sameSite: 'lax' });
       return { success: true };
     });
 
