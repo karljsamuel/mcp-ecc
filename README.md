@@ -138,7 +138,7 @@ Feature branches off `dev`; PRs against `dev`. Run `npm run build` to compile al
 
 If you find `mcp-ecc` useful, consider supporting its development:
 
-- **PayPal:** [paypal.me/KarlJosephSamuel](https://paypal.me/KarlJosephSamuel) (`karljsamuel@gmail.com`)
+- **PayPal:** [paypal.me/KarlJosephSamuel](https://paypal.me/KarlJosephSamuel)
 - **GitHub Sponsors:** [github.com/sponsors/karljsamuel](https://github.com/sponsors/karljsamuel)
 - **Ko-fi:** [ko-fi.com/karljsamuel](https://ko-fi.com/karljsamuel)
 - **Patreon:** [patreon.com/karljsamuel](https://patreon.com/karljsamuel)
