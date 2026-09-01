@@ -9,6 +9,7 @@ A Model Context Protocol (MCP) server that lets AI assistants read, write and ma
 ![License](https://img.shields.io/badge/license-MIT-blue?logo=open-source-initiative&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)
 ![Version](https://img.shields.io/badge/version-0.4.0--beta.1-purple)
+[![Sponsor](https://img.shields.io/github/sponsors/karljsamuel?color=ea4aaa&logo=github-sponsors&logoColor=white)](https://github.com/sponsors/karljsamuel)
 ![Node](https://img.shields.io/badge/node-%3E%3D24-339933?logo=nodedotjs&logoColor=white)
 ![MCP](https://img.shields.io/badge/Model%20Context%20Protocol-black)
 ![Docker](https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white)
@@ -138,7 +139,7 @@ Feature branches off `dev`; PRs against `dev`. Run `npm run build` to compile al
 If you find `mcp-ecc` useful, consider supporting its development:
 
 - **PayPal:** [paypal.me/KarlJosephSamuel](https://paypal.me/KarlJosephSamuel) (`karljsamuel@gmail.com`)
-- **GitHub Sponsors:** [github.sponsors.karljsamuel](https://github.sponsors.karljsamuel)
+- **GitHub Sponsors:** [github.com/sponsors/karljsamuel](https://github.com/sponsors/karljsamuel)
 
 ---
 
