@@ -40,15 +40,39 @@ export class MicrosoftProvider implements IMailProvider, ICalendarProvider, ICon
     const expiry = this.credentials.expiryDate || 0;
     if (Date.now() + 60000 >= expiry && this.credentials.refreshToken) {
       try {
-        // Token refresh would be handled by OAuthManager
-        // This is a placeholder - actual refresh happens externally
+        const tokenUrl = `https://login.microsoftonline.com/${this.credentials.tenantId || 'common'}/oauth2/v2.0/token`;
+        const body: Record<string, string> = {
+          client_id: this.credentials.clientId || '',
+          grant_type: 'refresh_token',
+          refresh_token: this.credentials.refreshToken,
+          scope: 'offline_access https://graph.microsoft.com/Mail.ReadWrite https://graph.microsoft.com/Mail.Send https://graph.microsoft.com/Calendars.ReadWrite https://graph.microsoft.com/Contacts.ReadWrite https://graph.microsoft.com/User.Read',
+        };
+        // Public (mobile/desktop) clients must NOT send a client secret —
+        // doing so returns AADSTS90023.
+        if (this.credentials.clientSecret && !this.credentials.isPublicClient) {
+          body.client_secret = this.credentials.clientSecret;
+        }
+
+        const response = await fetch(tokenUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams(body).toString(),
+        });
+        const data: any = await response.json();
+        if (!response.ok || !data.access_token) {
+          throw new Error(`refresh failed: ${data.error} - ${data.error_description || ''}`);
+        }
+        this.credentials.accessToken = data.access_token;
+        if (data.refresh_token) this.credentials.refreshToken = data.refresh_token;
+        this.credentials.expiryDate = Date.now() + (data.expires_in || 3600) * 1000;
       } catch (error) {
         throw new Error(`Failed to refresh Microsoft token: ${error}`);
       }
     }
   }
 
-  private getHeaders(): Record<string, string> {
+  private async getHeaders(): Promise<Record<string, string>> {
+    await this.ensureFreshToken();
     return {
       Authorization: `Bearer ${this.credentials.accessToken}`,
       'Content-Type': 'application/json',
@@ -58,7 +82,7 @@ export class MicrosoftProvider implements IMailProvider, ICalendarProvider, ICon
   private async fetchGraph<T>(url: string, options: RequestInit = {}): Promise<T> {
     const response = await fetch(`https://graph.microsoft.com/v1.0${url}`, {
       ...options,
-      headers: { ...this.getHeaders(), ...options.headers },
+      headers: { ...await this.getHeaders(), ...options.headers },
     });
 
     if (!response.ok) {
@@ -66,7 +90,10 @@ export class MicrosoftProvider implements IMailProvider, ICalendarProvider, ICon
       throw new Error(`Graph API error: ${response.status} - ${error.error?.message || response.statusText}`);
     }
 
-    return response.json() as Promise<T>;
+    // Some endpoints (e.g. sendMail) return 202 with an empty body.
+    const text = await response.text();
+    if (!text) return undefined as T;
+    return JSON.parse(text) as T;
   }
 
   // --- IMailProvider ---

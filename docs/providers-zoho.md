@@ -32,12 +32,12 @@ One consent covers all three domains (adjust to your needs):
 
 ```
 ZohoMail.messages.ALL
-ZohoCalendar.events.ALL
-ZohoContacts.contacts.ALL
+ZohoCalendar.calendar.ALL
+zohocontacts.contactapi.ALL
 ZohoMail.accounts.READ
 ```
 
-Scopes are `module.operation` — use the `.READ` / `.UPDATE` variants to restrict writes.
+Scopes are `module.operation` — use the `.READ` / `.UPDATE` variants to restrict writes. Calendar access uses `ZohoCalendar.calendar.*`; Contacts API access uses the lowercase `zohocontacts.contactapi.*` prefix.
 
 ## 3. Register the client in mcp-ecc (not `.env`), including region
 

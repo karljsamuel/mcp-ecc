@@ -3,7 +3,10 @@ import 'dotenv/config';
 import { program } from 'commander';
 import chalk from 'chalk';
 import readline from 'readline';
+import { createServer } from 'http';
+import { randomUUID } from 'crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from 'fs';
+import { execFile } from 'child_process';
 import * as path from 'path';
 import { SQLiteStorage } from '@mcp-ecc/storage-sqlite';
 import { AuthService, OAuthManager, OAuthClient, ProviderName } from '@mcp-ecc/core';
@@ -235,6 +238,94 @@ async function handleListAccounts(): Promise<void> {
   console.log('');
 }
 
+function startLocalServerAndGetCode(port: number, expectedState?: string, accountInfo?: { name: string; email: string }): Promise<{ code: string; state: string }> {
+  return new Promise((resolve, reject) => {
+    const server = createServer((req, res) => {
+      try {
+        const urlObj = new URL(req.url || '', `http://127.0.0.1:${port}`);
+        const code = urlObj.searchParams.get('code');
+        const state = urlObj.searchParams.get('state');
+        const error = urlObj.searchParams.get('error');
+        const errorDescription = urlObj.searchParams.get('error_description');
+
+        // Handle provider-side error / user denial
+        if (error) {
+          server.close();
+          reject(new Error(`Authorization failed: ${error}${errorDescription ? ' - ' + errorDescription : ''}`));
+          return;
+        }
+
+        // Validate the state to prevent CSRF
+        if (expectedState && state !== expectedState) {
+          res.writeHead(403, { 'Content-Type': 'text/plain' });
+          res.end('State mismatch. Please re-run the authorization flow.');
+          return;
+        }
+
+        if (code) {
+          const accountHtml = accountInfo
+            ? '<p style="font-size: 15px; color: #334155; margin-bottom: 8px;"><strong>Account:</strong> ' +
+              escapeHtml(accountInfo.name) + ' (' + escapeHtml(accountInfo.email) + ')</p>\n'
+            : '';
+          res.writeHead(200, { 'Content-Type': 'text/html' });
+          res.end(
+            '<html>\n' +
+              '<body style="font-family: sans-serif; text-align: center; padding-top: 100px; background-color: #f8fafc; color: #1e293b;">\n' +
+                '<div style="max-width: 500px; margin: 0 auto; background: white; padding: 40px; border-radius: 12px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);">\n' +
+                  '<h1 style="color: #10b981; margin-bottom: 10px;">Authorization Successful</h1>\n' +
+                  accountHtml +
+                  '<p style="font-size: 16px; margin-bottom: 20px;">mcp-ecc has securely captured your authentication tokens.</p>\n' +
+                  '<p style="color: #64748b;">You can close this browser window and return to your terminal.</p>\n' +
+                '</div>\n' +
+              '</body>\n' +
+            '</html>'
+          );
+          server.close();
+          resolve({ code, state: state || '' });
+        } else {
+          res.writeHead(400, { 'Content-Type': 'text/plain' });
+          res.end('Missing code or state parameters');
+        }
+      } catch (err: any) {
+        res.writeHead(500);
+        res.end('Internal Error: ' + err.message);
+      }
+    });
+    
+    server.listen(port, '127.0.0.1', () => {
+      // successfully listening
+    });
+    server.on('error', (err) => {
+      reject(err);
+    });
+  });
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+async function findAvailablePort(startPort: number): Promise<number> {
+  const blockedPorts = [5060, 5061, 6000, 6566, 6665, 6666, 6667, 6668, 6669, 6697];
+  let port = startPort;
+  while (blockedPorts.includes(port)) {
+    port++;
+  }
+  const { createServer } = await import('http');
+  return new Promise((resolve) => {
+    const probe = createServer();
+    probe.listen(port, '127.0.0.1', () => {
+      probe.close(() => resolve(port));
+    });
+    probe.on('error', () => resolve(findAvailablePort(port + 1)));
+  });
+}
+
 async function handleAddAccount(): Promise<void> {
   const currentUser = await ensureAuthenticated();
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -295,6 +386,18 @@ async function handleAddAccount(): Promise<void> {
 
         let tenantId = 'common';
         let accountsServer = 'accounts.zoho.com';
+        let clientType: 'public' | 'confidential' = 'confidential';
+
+        // Client type determines whether a client secret is sent on token refresh.
+        // Desktop / Installed / Non-browser apps are PUBLIC clients (no secret on
+        // refresh). Web apps / server-side are CONFIDENTIAL (secret required).
+        console.log('\nClient Type:');
+        console.log('1. Desktop / Installed / Non-browser app (public client)');
+        console.log('2. Web app / server-side (confidential client)');
+        const clientTypeChoice = await askQuestion(rl, 'Choose option [2]: ') || '2';
+        if (clientTypeChoice === '1') {
+          clientType = 'public';
+        }
 
         if (sel.provider === 'microsoft') {
           const isOrg = await askQuestion(rl, 'Is this an M365 Organization/Office account? (y/N): ');
@@ -325,6 +428,7 @@ async function handleAddAccount(): Promise<void> {
           scopes: [],
           tenantId: sel.provider === 'microsoft' ? tenantId : undefined,
           accountsServer: sel.provider === 'zoho' ? accountsServer : undefined,
+          clientType,
           enabled: true,
           createdAt: Date.now(),
           updatedAt: Date.now(),
@@ -337,17 +441,7 @@ async function handleAddAccount(): Promise<void> {
 
       if (!client) throw new Error('Failed to resolve OAuth client');
 
-      // Start Flow
-      console.log(`\nInitiating Device Authorization Flow for ${sel.provider}...`);
-      const flowRes = await oauthManager.startFlow(sel.provider as any, 'device_code', OAuthManager.clientToConfig(client, ''));
-
-      console.log('\n==================================================');
-      console.log(`1. Go to: ${chalk.cyan(flowRes.verificationUri)}`);
-      console.log(`2. Enter the code: ${chalk.bold.yellow(flowRes.userCode)}`);
-      console.log('==================================================\n');
-      console.log('Waiting for user authorization in the browser...');
-
-      const result = await oauthManager.pollDeviceCode(flowRes.deviceCode, flowRes.interval, OAuthManager.clientToConfig(client, ''));
+      const result = await runOAuthFlow(client, sel.provider as string, name.trim(), email.trim());
 
       await storage.saveAccount({
         id: email,
@@ -364,6 +458,7 @@ async function handleAddAccount(): Promise<void> {
           refreshToken: result.refreshToken,
           expiryDate: result.expiresAt,
           tenantId: client.tenantId,
+          isPublicClient: client.clientType === 'public',
           config: {
             accountsServer: client.accountsServer,
           },
@@ -452,6 +547,329 @@ async function handleLogout(): Promise<void> {
   console.log(chalk.green('\n✔ Successfully logged out.\n'));
 }
 
+// Run the correct OAuth flow for a provider and return tokens.
+// Google uses the redirect/authorization-code loopback flow (full Gmail access).
+// Microsoft and Zoho use the device flow (Zoho: Non-browser application client).
+async function runOAuthFlow(client: OAuthClient, provider: string, accountName: string, accountEmail: string): Promise<any> {
+  if (provider === 'google') {
+    const port = await findAvailablePort(5000);
+    const redirectUri = `http://127.0.0.1:${port}/oauth/callback`;
+    const state = randomUUID();
+
+    console.log('\nGoogle requires Web authorization flow for full Gmail access.');
+    console.log('Register this redirect URI in your Google Cloud Console (Desktop app):');
+    console.log(chalk.cyan(`  ${redirectUri}`));
+    console.log(`\nStarting local callback server on port ${port}...`);
+
+    const scopes = client.scopes && client.scopes.length > 0
+      ? client.scopes
+      : ['https://www.googleapis.com/auth/gmail.modify',
+         'https://www.googleapis.com/auth/calendar',
+         'https://www.googleapis.com/auth/contacts',
+         'https://www.googleapis.com/auth/userinfo.email',
+         'https://www.googleapis.com/auth/userinfo.profile'];
+
+    const authUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
+    authUrl.searchParams.set('client_id', client.clientId);
+    authUrl.searchParams.set('redirect_uri', redirectUri);
+    authUrl.searchParams.set('response_type', 'code');
+    authUrl.searchParams.set('scope', scopes.join(' '));
+    authUrl.searchParams.set('access_type', 'offline');
+    authUrl.searchParams.set('prompt', 'consent');
+    authUrl.searchParams.set('state', state);
+
+    console.log('\n==================================================');
+    console.log('Open this URL in your browser and grant access:');
+    console.log('');
+    console.log(chalk.cyan(authUrl.toString()));
+    console.log('==================================================\n');
+    console.log('Waiting for authorization...');
+
+    const callback = await startLocalServerAndGetCode(port, state, { name: accountName, email: accountEmail });
+    const code = callback.code;
+
+    console.log('\nExchanging authorization code for tokens...');
+    const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        client_id: client.clientId,
+        client_secret: client.clientSecret,
+        code,
+        grant_type: 'authorization_code',
+        redirect_uri: redirectUri,
+      }).toString(),
+    });
+
+    const tokenData: any = await tokenResponse.json();
+    if (!tokenResponse.ok) {
+      throw new Error(`Token exchange failed: ${tokenData.error} - ${tokenData.error_description || ''}`);
+    }
+
+    console.log(chalk.green('\n✔ Successfully obtained tokens with full Gmail access!'));
+    return {
+      accessToken: tokenData.access_token,
+      refreshToken: tokenData.refresh_token,
+      expiresAt: Date.now() + tokenData.expires_in * 1000,
+      scope: tokenData.scope,
+    };
+  }
+
+  // Microsoft and Zoho device flow (Zoho: Non-browser application client)
+  console.log(`\nInitiating Device Authorization Flow for ${provider}...`);
+  const flowRes = await oauthManager.startFlow(provider as any, 'device_code', OAuthManager.clientToConfig(client, ''));
+
+  console.log('\n==================================================');
+  console.log(`1. Go to: ${chalk.cyan(flowRes.verificationUri)}`);
+  console.log(`2. Enter the code: ${chalk.bold.yellow(flowRes.userCode)}`);
+  console.log('==================================================\n');
+  console.log('Waiting for user authorization in the browser...');
+
+  return oauthManager.pollDeviceCode(flowRes.deviceCode, flowRes.interval, OAuthManager.clientToConfig(client, ''));
+}
+
+async function handleEditAccount(): Promise<void> {
+  const currentUser = await ensureAuthenticated();
+  const accounts = await storage.listAccounts(currentUser.id);
+  if (accounts.length === 0) {
+    console.log(chalk.yellow('\nNo accounts configured yet.\n'));
+    return;
+  }
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    console.log(chalk.bold.cyan('\n=== Edit Account ==='));
+    accounts.forEach((acc, i) => {
+      console.log(`  ${i + 1}. [${acc.provider}] ${acc.name} (${acc.email})`);
+    });
+    const choiceIdx = parseInt(await askQuestion(rl, `\nSelect account to edit (1-${accounts.length}): `) || '', 10);
+    if (choiceIdx <= 0 || choiceIdx > accounts.length) {
+      console.log(chalk.red('\nInvalid selection.\n'));
+      return;
+    }
+    const selected = accounts[choiceIdx - 1];
+
+    const updates: any = {};
+    const newName = await askQuestion(rl, `Name [${selected.name}]: `);
+    if (newName.trim()) updates.name = newName.trim();
+    const newSlug = await askQuestion(rl, `Slug [${selected.slug}]: `);
+    if (newSlug.trim()) updates.slug = newSlug.trim();
+    const newEmail = await askQuestion(rl, `Email [${selected.email}]: `);
+    if (newEmail.trim()) updates.email = newEmail.trim();
+
+    // Password-based providers (IMAP/SMTP/CalDAV/CardDAV) store an app password
+    // as their credential — allow updating it here.
+    const passwordProviders = ['imap', 'smtp', 'caldav', 'carddav'];
+    let newAppPassword: string | undefined;
+    if (passwordProviders.includes(selected.provider)) {
+      const answer = await askQuestion(rl, '\nUpdate App Password? (y/N): ');
+      if (answer.trim().toLowerCase() === 'y') {
+        newAppPassword = await askPassword(rl, 'New App Password: ');
+        const confirm = await askPassword(rl, 'Confirm App Password: ');
+        if (newAppPassword !== confirm) {
+          throw new Error('App passwords do not match');
+        }
+      }
+    }
+
+    console.log('\nSelect Status:');
+    console.log('1. active');
+    console.log('2. error');
+    console.log('3. disabled');
+    const statusChoice = await askQuestion(rl, `Current [${selected.status}], choose (1-3) or leave blank: `);
+    if (statusChoice.trim()) {
+      const statusMap: Record<string, string> = { '1': 'active', '2': 'error', '3': 'disabled' };
+      if (statusChoice === '1' || statusChoice === '2' || statusChoice === '3') {
+        updates.status = statusMap[statusChoice];
+      } else {
+        console.log(chalk.red('Invalid status choice.'));
+      }
+    }
+
+    if (Object.keys(updates).length > 0) {
+      await storage.updateAccount(selected.id, updates);
+      console.log(chalk.green('\n✔ Account details updated successfully.'));
+    }
+    if (newAppPassword) {
+      await storage.updateCredentials(selected.id, { appPassword: newAppPassword });
+      console.log(chalk.green('✔ App password updated successfully.'));
+    }
+    if (Object.keys(updates).length === 0 && !newAppPassword) {
+      console.log(chalk.yellow('\nNo changes made.'));
+    }
+    console.log('');
+  } catch (err: any) {
+    console.error(chalk.red(`\nError: ${err.message}\n`));
+  } finally {
+    rl.close();
+  }
+}
+
+async function handleReauthenticate(slug?: string): Promise<void> {
+  const currentUser = await ensureAuthenticated();
+  const accounts = await storage.listAccounts(currentUser.id);
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    let target: any;
+    if (slug) {
+      target = accounts.find(a => a.slug === slug);
+      if (!target) {
+        console.error(chalk.red(`Error: Account with slug '${slug}' not found.`));
+        return;
+      }
+    } else {
+      if (accounts.length === 0) {
+        console.log(chalk.yellow('\nNo accounts configured yet.\n'));
+        return;
+      }
+      console.log(chalk.bold.cyan('\n=== Reauthenticate Account ==='));
+      accounts.forEach((acc, i) => {
+        console.log(`  ${i + 1}. [${acc.provider}] ${acc.name} (${acc.email}) - Status: ${acc.status}`);
+      });
+      const choiceIdx = parseInt(await askQuestion(rl, `\nSelect account to reauthenticate (1-${accounts.length}): `) || '', 10);
+      if (choiceIdx <= 0 || choiceIdx > accounts.length) {
+        console.log(chalk.red('\nInvalid selection.\n'));
+        return;
+      }
+      target = accounts[choiceIdx - 1];
+    }
+
+    const oauthProviders = ['google', 'microsoft', 'zoho'];
+    if (!oauthProviders.includes(target.provider)) {
+      console.error(chalk.red(`Error: Reauthentication is only supported for OAuth providers (${oauthProviders.join(', ')}).`));
+      return;
+    }
+
+    // Resolve the stored OAuth client for this account
+    const clientId = target.credentials?.oauthClientId;
+    const client = clientId
+      ? await storage.getOAuthClient(clientId)
+      : null;
+
+    if (!client) {
+      console.error(chalk.red('Error: No saved OAuth client found for this account. Re-run: mcp-ecc add account'));
+      return;
+    }
+
+    console.log(`\nReauthenticating ${target.name} (${target.email})...`);
+    const result = await runOAuthFlow(client, target.provider, target.name, target.email);
+
+    await storage.updateCredentials(target.id, {
+      accessToken: result.accessToken,
+      refreshToken: result.refreshToken,
+      expiryDate: result.expiresAt,
+      tenantId: client.tenantId,
+      isPublicClient: client.clientType === 'public',
+    });
+    await storage.updateAccount(target.id, { status: 'active', health: 'unknown' });
+    console.log(chalk.green(`\n✔ Account '${target.name}' successfully reauthenticated.\n`));
+  } catch (err: any) {
+    console.error(chalk.red(`\nError: ${err.message}\n`));
+  } finally {
+    rl.close();
+  }
+}
+
+const ASCII_LINES = [
+  `   __  __    ____    ____           _____    ____    ____`,
+  `   |  \\/  |  / ___|  |  _ \\         | ____|  / ___|  / ___|`,
+  `   | |\\/| | | |      | |_) |  ---   | |__   | |     | |    `,
+  `   | |  | | | |      |  __/   ---   |  __|  | |     | |    `,
+  `   | |  | | | |___   | |            | |___  | |___  | |___`,
+  `   |_|  |_|  \\____|  |_|            |_____|  \\____|  \\____|`,
+];
+
+const SUBTITLE = 'Email · Calendar · Contacts — one MCP server for all your accounts';
+
+function centerText(text: string): string {
+  const width = process.stdout.columns || 80;
+  const pad = Math.max(0, Math.floor((width - text.length) / 2));
+  return ' '.repeat(pad) + text;
+}
+
+function printBanner(): void {
+  // Align every row to the same width first, so the letter columns line up,
+  // then center the whole block as one unit.
+  const blockWidth = Math.max(...ASCII_LINES.map(l => l.length));
+  console.log('');
+  for (const line of ASCII_LINES) {
+    console.log(centerText(chalk.cyan(line.padEnd(blockWidth))));
+  }
+  console.log('');
+  console.log(centerText(chalk.gray(SUBTITLE)));
+  console.log('');
+}
+
+const TUI_COMMANDS = [
+  ['login', 'Log in to a user account'],
+  ['status', 'Show current login session status'],
+  ['password', 'Update password for currently logged-in user'],
+  ['list accounts', 'List configured accounts'],
+  ['add account', 'Add a new provider account'],
+  ['add user', 'Add a new user account (Admin only)'],
+  ['edit account', 'Edit a configured account'],
+  ['reauthenticate [slug]', 'Re-authenticate an OAuth account'],
+  ['remove account', 'Remove a configured account'],
+  ['start', 'Start the MCP server (stdio)'],
+  ['help', 'Show this help'],
+  ['exit', 'Leave the TUI'],
+];
+
+function showTuiHelp(): void {
+  console.log(chalk.bold.cyan('\nAvailable commands:'));
+  for (const [cmd, desc] of TUI_COMMANDS) {
+    console.log(`  ${chalk.green(cmd.padEnd(22))} ${chalk.gray(desc)}`);
+  }
+  console.log('');
+}
+
+async function runTui(): Promise<void> {
+  printBanner();
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+
+  const prompt = () => {
+    // The user types commands WITHOUT the mcp-ecc prefix while inside the TUI.
+    rl.setPrompt(chalk.cyan('mcp-ecc › '));
+    rl.prompt();
+  };
+
+  rl.on('line', async (raw) => {
+    const line = raw.trim();
+    if (!line) { prompt(); return; }
+
+    const argv = line.split(/\s+/);
+    const cmd = argv[0].toLowerCase();
+
+    if (cmd === 'exit' || cmd === 'quit' || cmd === 'q') {
+      console.log(chalk.gray('\nGoodbye.'));
+      rl.close();
+      return;
+    }
+    if (cmd === 'help' || cmd === '?') {
+      showTuiHelp();
+      prompt();
+      return;
+    }
+
+    // Re-dispatch the command in a subprocess so its own readline prompts work
+    // cleanly on stdin without conflicting with this TUI loop.
+    await new Promise<void>((resolve) => {
+      execFile(process.execPath, [process.argv[1], ...argv], (err, stdout, stderr) => {
+        if (stdout) process.stdout.write(stdout);
+        if (stderr) process.stdout.write(stderr);
+        resolve();
+      });
+    });
+    prompt();
+  });
+
+  rl.on('close', () => {
+    process.exit(0);
+  });
+
+  showTuiHelp();
+  prompt();
+}
+
 program
   .name('mcp-ecc')
   .description('MCP Email, Calendar, and Contacts Server')
@@ -485,6 +903,12 @@ addCmd.command('user').description('Add a new user account (Admin only)').action
 const removeCmd = program.command('remove').description('Remove resources');
 removeCmd.command('account').description('Remove a configured account').action(handleRemoveAccount);
 
+const editCmd = program.command('edit').description('Edit resources');
+editCmd.command('account').description('Edit a configured account (name, slug, email, status)').action(handleEditAccount);
+
+const reauthCmd = program.command('reauthenticate').description('Re-authenticate an OAuth account after failure/expiry');
+reauthCmd.argument('[slug]', 'Account slug to reauthenticate (selects interactively if omitted)').action((slug?: string) => handleReauthenticate(slug));
+
 const listCmd = program.command('list').description('List resources');
 listCmd.command('accounts').description('List configured accounts').action(handleListAccounts);
 
@@ -506,4 +930,10 @@ program
     console.error('MCP Server connected and running.');
   });
 
-program.parseAsync(process.argv).catch(console.error);
+// No arguments -> open the interactive TUI.
+const hasArgs = process.argv.slice(2).length > 0;
+if (!hasArgs) {
+  runTui();
+} else {
+  program.parseAsync(process.argv).catch(console.error);
+}

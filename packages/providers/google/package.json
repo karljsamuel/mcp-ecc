@@ -1,6 +1,6 @@
 {
   "name": "@mcp-ecc/provider-google",
-  "version": "0.3.1-beta.1",
+  "version": "0.4.0-beta.1",
   "description": "Google Workspace provider for mcp-ecc",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

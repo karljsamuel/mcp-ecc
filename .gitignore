@@ -19,3 +19,5 @@ yarn-error.log*
 packages/*/src/*.js
 packages/*/src/*.d.ts
 packages/*/src/*.map
+# Local MCP integration test harnesses (dev-only; rewrite-file-deps.mjs stays tracked)
+scripts/mcp-*.cjs

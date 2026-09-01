@@ -34,15 +34,20 @@ export class OAuthManager {
     const codeVerifier = this.generateCodeVerifier();
     const codeChallenge = await this.generateCodeChallenge(codeVerifier);
 
+    const scopes = (!config.scopes || config.scopes.length === 0)
+      ? this.getDefaultScopes(provider)
+      : config.scopes;
+    const resolvedConfig = { ...config, scopes };
+
     const oauthState: OAuthStateData = {
       provider,
       flowType,
       codeVerifier,
-      redirectUri: config.redirectUri,
-      clientId: config.clientId,
-      clientSecret: config.clientSecret,
-      tenantId: config.tenantId,
-      accountsServer: config.accountsServer,
+      redirectUri: resolvedConfig.redirectUri,
+      clientId: resolvedConfig.clientId,
+      clientSecret: resolvedConfig.clientSecret,
+      tenantId: resolvedConfig.tenantId,
+      accountsServer: resolvedConfig.accountsServer,
       createdAt: Date.now(),
     };
 
@@ -50,11 +55,11 @@ export class OAuthManager {
 
     switch (provider) {
       case 'google':
-        return this.startGoogleFlow(config, flowType, state, codeChallenge);
+        return this.startGoogleFlow(resolvedConfig, flowType, state, codeChallenge);
       case 'microsoft':
-        return this.startMicrosoftFlow(config, flowType, state, codeChallenge);
+        return this.startMicrosoftFlow(resolvedConfig, flowType, state, codeChallenge);
       case 'zoho':
-        return this.startZohoFlow(config, flowType, state, codeChallenge);
+        return this.startZohoFlow(resolvedConfig, flowType, state, codeChallenge);
       default:
         throw new AuthError(`Unsupported provider for OAuth: ${provider}`);
     }
@@ -105,17 +110,26 @@ export class OAuthManager {
     config: OAuthConfig,
     maxAttempts = 60
   ): Promise<OAuthTokens> {
-    const tokenUrl = this.getTokenUrl(config.provider, config.tenantId);
-    const checkInterval = Math.max(interval * 1000, 5000);
+    const tokenUrl = this.getDeviceTokenUrl(config.provider, config.tenantId, config.accountsServer);
+    // Zoho's interval is in milliseconds; Google/Microsoft return seconds.
+    const isZoho = config.provider === 'zoho';
+    const checkInterval = isZoho ? Math.max(interval, 5000) : Math.max(interval * 1000, 5000);
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       try {
-        const body: Record<string, string> = {
-          client_id: config.clientId,
-          device_code: deviceCode,
-          grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
-        };
-        if (config.clientSecret) {
+        const body: Record<string, string> = isZoho
+          ? {
+              client_id: config.clientId,
+              client_secret: config.clientSecret,
+              grant_type: 'device_token',
+              code: deviceCode,
+            }
+          : {
+              client_id: config.clientId,
+              device_code: deviceCode,
+              grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+            };
+        if (!isZoho && config.clientSecret) {
           body.client_secret = config.clientSecret;
         }
 
@@ -127,6 +141,20 @@ export class OAuthManager {
 
         const data: any = await response.json();
 
+        // Zoho returns pending/error states with HTTP 200 — check the payload
+        // error before treating the response as success.
+        if (data && data.error) {
+          if (data.error === 'authorization_pending') {
+            await this.sleep(checkInterval);
+            continue;
+          }
+          if (data.error === 'slow_down') {
+            await this.sleep(checkInterval * 2);
+            continue;
+          }
+          throw new AuthError(`OAuth error: ${data.error} - ${data.error_description || ''}`);
+        }
+
         if (response.ok) {
           return {
             accessToken: data.access_token,
@@ -136,15 +164,6 @@ export class OAuthManager {
             idToken: data.id_token,
             tokenType: data.token_type || 'Bearer',
           };
-        }
-
-        if (data.error === 'authorization_pending') {
-          await this.sleep(checkInterval);
-          continue;
-        }
-        if (data.error === 'slow_down') {
-          await this.sleep(checkInterval * 2);
-          continue;
         }
 
         throw new AuthError(`OAuth error: ${data.error} - ${data.error_description || ''}`);
@@ -164,12 +183,14 @@ export class OAuthManager {
     codeChallenge: string
   ): Promise<DeviceCodeResponse & { state: string; codeVerifier: string }> {
     if (flowType === 'device_code') {
+      // Google Device Flow explicitly rejects all Gmail scopes (gmail.modify, gmail.readonly, etc.)
+      const allowedDeviceScopes = config.scopes.filter(s => !s.includes('gmail'));
       const response = await fetch('https://oauth2.googleapis.com/device/code', {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: new URLSearchParams({
           client_id: config.clientId,
-          scope: config.scopes.join(' '),
+          scope: allowedDeviceScopes.join(' '),
         }).toString(),
       });
 
@@ -182,7 +203,15 @@ export class OAuthManager {
       }
 
       const data: any = await response.json();
-      return { ...data, state, codeVerifier: '' };
+      return {
+        deviceCode: data ? (data.device_code ?? data.deviceCode) ?? '' : '',
+        userCode: data ? (data.user_code ?? data.userCode) ?? '' : '',
+        verificationUri: data ? (data.verification_uri ?? data.verification_url ?? data.verificationUri) ?? '' : '',
+        expiresIn: data ? (data.expires_in ?? data.expiresIn) ?? 0 : 0,
+        interval: data ? (data.interval ?? 5) ?? 5 : 5,
+        state,
+        codeVerifier: '',
+      };
     }
 
     // Authorization code flow
@@ -238,7 +267,15 @@ export class OAuthManager {
       }
 
       const data: any = await response.json();
-      return { ...data, state, codeVerifier: '' };
+      return {
+        deviceCode: data ? (data.device_code ?? data.deviceCode) ?? '' : '',
+        userCode: data ? (data.user_code ?? data.userCode) ?? '' : '',
+        verificationUri: data ? (data.verification_uri ?? data.verification_url ?? data.verificationUri) ?? '' : '',
+        expiresIn: data ? (data.expires_in ?? data.expiresIn) ?? 0 : 0,
+        interval: data ? (data.interval ?? 5) ?? 5 : 5,
+        state,
+        codeVerifier: '',
+      };
     }
 
     // Authorization code flow
@@ -272,7 +309,38 @@ export class OAuthManager {
     const accountsServer = config.accountsServer || 'accounts.zoho.com';
 
     if (flowType === 'device_code') {
-      throw new AuthError('Zoho does not support device code flow');
+      // Zoho device flow (Non-browser application client)
+      const response = await fetch(`https://${accountsServer}/oauth/v3/device/code`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          client_id: config.clientId,
+          grant_type: 'device_request',
+          scope: config.scopes.join(' '),
+          access_type: 'offline',
+          prompt: 'consent',
+        }).toString(),
+      });
+
+      if (!response.ok) {
+        let errDetail = '';
+        try {
+          errDetail = ` - ${await response.text()}`;
+        } catch {}
+        throw new AuthError(`Failed to initiate Zoho device flow: ${response.status} ${response.statusText}${errDetail}`);
+      }
+
+      const data: any = await response.json();
+      // Zoho returns interval in MILLISECONDS (unlike Google/Microsoft seconds).
+      return {
+        deviceCode: data ? (data.device_code ?? data.deviceCode) ?? '' : '',
+        userCode: data ? (data.user_code ?? data.userCode) ?? '' : '',
+        verificationUri: data ? (data.verification_url ?? data.verification_uri_complete ?? data.verification_uri ?? data.verificationUri) ?? '' : '',
+        expiresIn: data ? (data.expires_in ?? data.expiresIn) ?? 0 : 0,
+        interval: data ? (data.interval ?? 5) ?? 5 : 5,
+        state,
+        codeVerifier: '',
+      };
     }
 
     const authUrl = new URL(`https://${accountsServer}/oauth/v2/auth`);
@@ -378,6 +446,18 @@ export class OAuthManager {
     }
   }
 
+  // Zoho's device flow polls a dedicated v3 device/token endpoint (not the v2
+  // token endpoint Google/Microsoft use for device polling), with
+  // grant_type=device_token.
+  private getDeviceTokenUrl(provider: ProviderName, tenantId?: string, accountsServer?: string): string {
+    switch (provider) {
+      case 'zoho':
+        return `https://${accountsServer || zohoOAuthConfig.accountsServer || 'accounts.zoho.com'}/oauth/v3/device/token`;
+      default:
+        return this.getTokenUrl(provider, tenantId);
+    }
+  }
+
   private getDefaultScopes(provider: ProviderName): string[] {
     switch (provider) {
       case 'google':
@@ -400,8 +480,10 @@ export class OAuthManager {
       case 'zoho':
         return [
           'ZohoMail.messages.ALL',
-          'ZohoCalendar.events.ALL',
-          'ZohoContacts.contacts.ALL',
+          'ZohoMail.folders.READ',
+          'ZohoCalendar.calendar.ALL',
+          'ZohoCalendar.event.ALL',
+          'zohocontacts.contactapi.ALL',
           'ZohoMail.accounts.READ',
         ];
       default:

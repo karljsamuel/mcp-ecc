@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0-beta.1] - 2026-09-01
+
+### Added
+- **Interactive TUI**: running `mcp-ecc` with no arguments opens a terminal UI — ASCII-art banner, centered subtitle, and a `mcp-ecc ›` prompt where commands are typed without the `mcp-ecc` prefix (`login`, `list accounts`, `add account`, `edit account`, `reauthenticate`, `remove account`, `start`, `exit`).
+- **CalDAV provider** (calendar) — full implementation replacing the placeholder stub: list calendars, list/get/create/update/delete events, free/busy. Uses standard WebDAV (tsdav client) — service discovery, PROPFIND, PUT/GET/DELETE with etags. Stable event UIDs on update.
+- **CardDAV provider** (contacts) — full implementation replacing the placeholder stub: list/get/create/update/delete/search contacts, vCard 3.0 with stable UIDs.
+- **`edit account`** — now edits name, slug, email and status, and (for IMAP/SMTP/CalDAV/CardDAV) can update the app password.
+- **`reauthenticate [slug]`** — re-runs the OAuth flow for a Google/Microsoft/Zoho account whose token expired or was revoked; resets status to `active`.
+- **OAuth client type** — new clients record whether they are **public** (Desktop / Installed / Non-browser app) or **confidential** (Web app / server-side). Token refresh behaves accordingly (public clients never send a client secret).
+- **Zoho device flow** — implemented against Zoho's v3 device endpoints (`/oauth/v3/device/code`, `/oauth/v3/device/token`) with correct `device_request`/`device_token` grant types and millisecond intervals.
+- **Zoho HTML send** — `mail.sendMessage` now sends HTML (was plaintext-only) using the correct `/api/accounts/{accountId}/messages` endpoint and the authenticated mailbox address as the From address.
+- **Zoho folder-aware mail** — `mail.listMessages` resolves folder names (e.g. `INBOX`) to Zoho folder IDs; `mail.getMessage` fetches metadata + content via the folder-scoped content endpoint.
+- **Microsoft token refresh** — real refresh implementation (was a no-op placeholder); empty-body responses (e.g. `sendMail` 202) handled gracefully.
+- **IMAP/SMTP** — fixed UID-based fetch/flag/move/delete operations; message flags now read correctly (read/unread state).
+- **Google flags** — `mail.setFlags` `\Seen` semantics corrected (mark read ↔ unread mapping to the UNREAD label).
+- **MCP integration tests** — reusable scripts under `scripts/` exercising every tool over the real stdio MCP protocol against live accounts.
+
+### Changed
+- **Port selection** — the CLI's local OAuth callback port now starts at 5000 and skips ports blocked by Chromium (`5060`, `5061`, `6000`, `6566`, `6665–6669`, `6697`), avoiding `ERR_UNSAFE_PORT` in the browser.
+- **CLI documentation** — new `docs/cli.md` reference; `docs/deployment-cli.md` rewritten for the npm-install workflow (no more clone-and-build as the primary path).
+- **Zoho scopes** — corrected default scope set: `ZohoMail.messages.ALL`, `ZohoMail.folders.READ`, `ZohoCalendar.calendar.ALL`, `ZohoCalendar.event.ALL`, `zohocontacts.contactapi.ALL`, `ZohoMail.accounts.READ`.
+- **Browser success page** — no emoji (wasn't rendering everywhere); shows the account name and email after authorization.
+
+### Fixed
+- Zoho device flow previously printed `undefined` URL/code (snake_case response fields were not normalised) and polled with the wrong grant type.
+- Zoho calendar events failed: wrong endpoint (needs calendar UID, `eventdata` query param, compact `yyyyMMdd'T'HHmmss'Z'` dates) and delete needed the event UID + etag.
+- Zoho contacts failed: wrong endpoint (`/api/v1/contacts` → `/api/v1/accounts/self/contacts`) and wrong payload shape/field names.
+- Microsoft accounts failed with "JWT is not well formed" — expired tokens were never refreshed (placeholder) and public clients wrongly sent a client secret.
+- IMAP `listMessages` returned zero messages — `fetchOne` was called with `uid: true` inside the query instead of as an option.
+- Google `setFlags` inverted read/unread.
+- SQLite storage: `oauth_clients` gained a `clientType` column with an automatic migration for existing databases.
+
 ## [0.3.1] - 2026-08-30
 
 ### Added

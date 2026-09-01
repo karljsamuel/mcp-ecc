@@ -10,7 +10,7 @@ Every provider account in mcp-ecc carries two identifiers: a human-friendly **`n
 | Format | Free text — may contain spaces and special characters | `[a-z0-9]`, `-` and `_` allowed; lowercase |
 | Uniqueness | Not required to be unique | **Unique per owner** |
 | Mutable? | Yes — change freely | Yes, but it is the key used in MCP resource URIs, so changing it moves references |
-| Example | `Karl's Gmail`, `Work Outlook (UK)`, `Q3 Team Calendar!` | `karls-gmail`, `work-outlook-uk`, `q3-team-calendar` |
+| Example | `My Gmail`, `Work Outlook (UK)`, `Q3 Team Calendar!` | `my-gmail`, `work-outlook-uk`, `q3-team-calendar` |
 
 The internal database row also has a UUID `id` and an `ownerId` (the owning user); neither is usually shown to end users.
 

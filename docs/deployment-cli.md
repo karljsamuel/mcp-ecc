@@ -1,77 +1,69 @@
-# Local Clone / CLI Deployment
+# Local / CLI Deployment
 
 Run mcp-ecc directly on a machine with Node.js. This is the simplest mode and the one used when connecting an MCP agent host (Claude, Cursor, etc.) to a **stdio** server.
 
+For the full command reference, see **[CLI Reference](cli.md)**.
+
 ## Prerequisites
 
-- **Node.js** 20 or newer
+- **Node.js** 24 or newer
 - **npm** (bundled with Node.js)
 
-## 1. Clone & install
+## 1. Install from npm
+
+The CLI is published as the npm package **`mcp-ecc`** and ships with compiled `dist/` — no clone or build needed:
 
 ```bash
-git clone https://github.com/karljsamuel/mcp-ecc.git
-cd mcp-ecc
-npm install
+npm install -g mcp-ecc
 ```
 
-## 2. Build
-
-The monorepo uses Turbo. Build all packages with:
+Verify:
 
 ```bash
-npm run build
-# or run turbo directly for a single package
-npx turbo run build --filter=@mcp-ecc/cli
+mcp-ecc --help
 ```
 
-This compiles TypeScript to `dist/` in each package.
+## 2. Configure environment (optional)
 
-## 3. Configure environment (optional)
-
-Create a `.env` file in the repository root. The only variable strictly required for encrypted credential storage is the encryption key. If it is omitted, credentials are stored in plaintext (not recommended).
+Create a `.env` file **in the directory where you run mcp-ecc**. The only variable strictly required for encrypted credential storage is the encryption key. If it is omitted, credentials are stored with a default key (not recommended).
 
 ```dotenv
-# Required — used to encrypt stored credentials (AES-256-GCM)
+# Required — used to encrypt stored credentials (AES)
 MCP_ENCRYPTION_KEY=your-long-random-secret
 
-# OAuth client credentials (required only for the providers you use)
-GOOGLE_CLIENT_ID=...
-GOOGLE_CLIENT_SECRET=...
-MICROSOFT_CLIENT_ID=...
-MICROSOFT_CLIENT_SECRET=...
-ZOHO_CLIENT_ID=...
-ZOHO_CLIENT_SECRET=...
-
-# Base URL used for OAuth redirects (only needed for auth-code flow via the web UI)
-BASE_URL=http://localhost:3001
+# Optional — override the SQLite database location
+# MCP_STORAGE_FILE=/absolute/path/to/mcp-ecc.db
 ```
 
-## 4. Run the CLI
+OAuth client credentials are **not** environment variables — they are entered interactively during `mcp-ecc add account` and stored per-user in the database.
 
-The CLI binary is `mcp-ecc` (defined in `packages/cli/bin`). Because of the workspace layout, run it with `node` from the root, or link it globally:
+## 3. Run the CLI
 
-```bash
-# Option A: run via node from the repo
-node packages/cli/dist/bin.js --help
+**Running `mcp-ecc` with no arguments opens the interactive TUI** — commands are typed without the `mcp-ecc` prefix:
 
-# Option B: link globally once
-npm link
-mcp-ecc --help
+```text
+mcp-ecc › login
+mcp-ecc › list accounts
+mcp-ecc › exit
 ```
 
 ### CLI commands
 
 | Command | Purpose |
 |---------|---------|
+| `mcp-ecc login` | Log in, or bootstrap the first admin account on first run |
+| `mcp-ecc logout` | End the current session |
+| `mcp-ecc status` | Show current login session status |
+| `mcp-ecc password` | Update password for currently logged-in user |
+| `mcp-ecc add account` | Add a new provider account (Google, Microsoft, Zoho, IMAP/SMTP, CalDAV, CardDAV) |
+| `mcp-ecc add user` | Add a new user account (Admin only) |
+| `mcp-ecc list accounts` | List configured accounts and their status |
+| `mcp-ecc edit account` | Edit an account's name, slug, email or status |
+| `mcp-ecc reauthenticate [slug]` | Re-authenticate a Google / Microsoft / Zoho account |
+| `mcp-ecc remove account` | Remove a configured account |
 | `mcp-ecc start` | Start the MCP server on **stdio** (default transport for agent hosts) |
-| `mcp-ecc auth` | Interactively add + authenticate an account |
-| `mcp-ecc list-accounts` | List all configured accounts |
-| `mcp-ecc edit-account <id>` | Edit an account's configuration |
-| `mcp-ecc reauth <id>` | Re-authenticate a Google / Microsoft / Zoho account |
-| `mcp-ecc delete-account <id>` | Remove an account |
 
-## 5. Connect an MCP agent host
+## 4. Connect an MCP agent host
 
 Point your agent host's MCP config at the `mcp-ecc start` command. For Claude Code / Cursor, add to your MCP config:
 
@@ -79,8 +71,8 @@ Point your agent host's MCP config at the `mcp-ecc start` command. For Claude Co
 {
   "mcpServers": {
     "mcp-ecc": {
-      "command": "node",
-      "args": ["/absolute/path/to/mcp-ecc/packages/cli/dist/bin.js", "start"],
+      "command": "mcp-ecc",
+      "args": ["start"],
       "env": {
         "MCP_ENCRYPTION_KEY": "your-long-random-secret"
       }
@@ -89,21 +81,36 @@ Point your agent host's MCP config at the `mcp-ecc start` command. For Claude Co
 }
 ```
 
+If `mcp-ecc` is not on the agent host's PATH, use the full path (from `which mcp-ecc`), e.g. `"command": "/usr/local/bin/mcp-ecc"`.
+
 The server speaks the Model Context Protocol over stdio: it reads JSON-RPC requests on stdin and writes responses on stdout. When the host launches `mcp-ecc start`, it can then call the `mail.*`, `calendar.*`, `contacts.*` and `accounts.*` tools.
 
 ## Storage note
 
-The CLI currently defaults to **in-memory storage**, so accounts/tokens are lost when the process exits. For persistent single-user storage, use the **Docker** mode (SQLite) or swap the CLI's `MemoryStorage` for `SQLiteStorage`.
+The CLI uses **SQLite storage** by default. The database is created at `data/mcp-ecc.db` (relative to the working directory; override with `MCP_STORAGE_FILE`) on first run, and all accounts, OAuth clients and users persist across restarts. Credentials (tokens, app passwords) are stored encrypted inside the database using `MCP_ENCRYPTION_KEY`.
 
 ## Adding accounts
 
-`mcp-ecc auth` runs an interactive wizard:
+`mcp-ecc add account` runs an interactive wizard:
 
-1. Enter the account email / identifier
+1. Enter the account name, slug and email
 2. Choose a provider (Google = 1, Microsoft = 2, Zoho = 3, IMAP/SMTP = 4, CalDAV = 5, CardDAV = 6)
-3. For OAuth providers: enter the Client ID (and secret when required)
-4. Follow the on-screen device-code or browser flow
-
-For OAuth providers, the CLI uses the **device authorization grant**: it prints a URL and code, you authorise in a browser, and the server polls for the token in the background.
+3. For OAuth providers: pick a saved OAuth client or enter a new Client ID (and secret when required)
+4. Follow the on-screen flow — **Google** opens the loopback authorization-code flow, **Microsoft** and **Zoho** use the device flow
 
 See the individual provider docs for the exact scopes and client setup each provider requires.
+
+## Developing from source
+
+For contributors — clone, install, build, then run the local binary:
+
+```bash
+git clone https://github.com/karljsamuel/mcp-ecc.git
+cd mcp-ecc
+npm install
+npm run build
+
+node packages/cli/dist/bin.js --help
+# or link it globally to use `mcp-ecc` from anywhere:
+npm link
+```

@@ -30,6 +30,8 @@ export interface AccountCredentials {
   config?: AccountConfig;
   // Tenant ID for Microsoft
   tenantId?: string;
+  // Public client (mobile/desktop) — must not send a client secret on refresh
+  isPublicClient?: boolean;
 }
 
 export interface Account {
@@ -61,6 +63,9 @@ export interface OAuthClient {
   scopes: string[];
   tenantId?: string; // Microsoft
   accountsServer?: string; // Zoho region
+  // 'public' = Desktop / Non-browser / Installed app (no client secret on refresh)
+  // 'confidential' = Web app / server-side (client secret required)
+  clientType?: 'public' | 'confidential';
   enabled: boolean;
   createdAt: number;
   updatedAt: number;

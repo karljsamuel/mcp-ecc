@@ -92,6 +92,8 @@ Times are epoch **milliseconds**.
 
 Available for Google, Microsoft, Zoho and CardDAV.
 
+> **CalDAV/CardDAV tested platform:** these providers implement standard WebDAV (CalDAV RFC 4791, CardDAV RFC 6352) with Basic auth and were **tested against Radicale 3.7.8**. They should work with any standards-compliant server (Nextcloud, Baikal, DAViCal, etc.); OAuth-only providers are not supported.
+
 ### `contacts.list`
 *Input:* `{ "accountId": "...", "limit": 100, "cursor": "" }`
 

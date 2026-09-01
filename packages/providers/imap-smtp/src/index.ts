@@ -100,7 +100,7 @@ export class ImapSmtpProvider implements IMailProvider, ICalendarProvider, ICont
       const emailMessages: EmailMessage[] = [];
       for (const range of sliced) {
         try {
-          const fetched = await client.fetchOne(range, { source: true, uid: true });
+          const fetched = await client.fetchOne(range, { source: true, flags: true }, { uid: true });
           if (!fetched || !fetched.source) continue;
           const parsed = await simpleParser(fetched.source);
           emailMessages.push(this.mapParsedMessage(parsed, String(fetched.uid), folderId, fetched.flags));
@@ -120,7 +120,7 @@ export class ImapSmtpProvider implements IMailProvider, ICalendarProvider, ICont
     try {
       await client.mailboxOpen('INBOX');
       const uid = messageId.includes(':') ? messageId.split(':').pop()! : messageId;
-      const fetched = await client.fetchOne(uid, { source: true, uid: true });
+      const fetched = await client.fetchOne(uid, { source: true, flags: true }, { uid: true });
       if (!fetched || !fetched.source) {
         throw new Error(`Message ${messageId} not found`);
       }
@@ -274,7 +274,8 @@ export class ImapSmtpProvider implements IMailProvider, ICalendarProvider, ICont
   // --- Helpers ---
 
   private mapParsedMessage(parsed: any, id: string, folderId: string, flags: any = []): EmailMessage {
-    const flagList = Array.isArray(flags) ? flags : [];
+    // imapflow returns flags as a Set — normalise to an array.
+    const flagList = Array.isArray(flags) ? flags : Array.from(flags || []);
     return {
       id,
       threadId: parsed.references ? parsed.references[0] : undefined,

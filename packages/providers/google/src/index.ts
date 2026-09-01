@@ -280,14 +280,17 @@ export class GoogleProvider implements IMailProvider, ICalendarProvider, IContac
 
   async setFlags(messageId: string, addFlags: string[], removeFlags: string[]): Promise<void> {
     await this.ensureFreshToken();
-    const labelMap: Record<string, string> = {
-      '\\Seen': 'UNREAD',
-      '\\Flagged': 'STARRED',
-      '\\Deleted': 'TRASH',
-    };
+    // Gmail models read state via the UNREAD label: adding \Seen (mark read)
+    // must REMOVE the UNREAD label; removing \Seen (mark unread) must ADD it.
+    const addLabelIds: string[] = [];
+    const removeLabelIds: string[] = [];
 
-    const addLabelIds = addFlags.map(f => labelMap[f]).filter(Boolean);
-    const removeLabelIds = removeFlags.map(f => labelMap[f]).filter(Boolean);
+    if (addFlags.includes('\\Seen')) removeLabelIds.push('UNREAD');
+    if (removeFlags.includes('\\Seen')) addLabelIds.push('UNREAD');
+    if (addFlags.includes('\\Flagged')) addLabelIds.push('STARRED');
+    if (removeFlags.includes('\\Flagged')) removeLabelIds.push('STARRED');
+    if (addFlags.includes('\\Deleted')) addLabelIds.push('TRASH');
+    if (removeFlags.includes('\\Deleted')) removeLabelIds.push('TRASH');
 
     await this.gmail.users.messages.modify({
       userId: 'me',

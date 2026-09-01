@@ -214,8 +214,10 @@ function getDefaultScopes(provider: string): string[] {
     case 'zoho':
       return [
         'ZohoMail.messages.ALL',
-        'ZohoCalendar.events.ALL',
-        'ZohoContacts.contacts.ALL',
+        'ZohoMail.folders.READ',
+        'ZohoCalendar.calendar.ALL',
+        'ZohoCalendar.event.ALL',
+        'zohocontacts.contactapi.ALL',
         'ZohoMail.accounts.READ',
       ];
     default:

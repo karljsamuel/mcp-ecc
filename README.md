@@ -8,7 +8,7 @@ A Model Context Protocol (MCP) server that lets AI assistants read, write and ma
 
 ![License](https://img.shields.io/badge/license-MIT-blue?logo=open-source-initiative&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)
-![Version](https://img.shields.io/badge/version-0.3.1--beta.1-purple)
+![Version](https://img.shields.io/badge/version-0.4.0--beta.1-purple)
 ![Node](https://img.shields.io/badge/node-%3E%3D24-339933?logo=nodedotjs&logoColor=white)
 ![MCP](https://img.shields.io/badge/Model%20Context%20Protocol-black)
 ![Docker](https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white)
@@ -40,6 +40,14 @@ docker run -d --name mcp-ecc \
 
 Open **http://localhost:3001** → create the admin account → add your provider accounts.
 
+### CLI (npm)
+
+```bash
+npm install -g mcp-ecc
+mcp-ecc            # interactive TUI — login, add accounts, manage everything
+mcp-ecc start      # stdio MCP server for agent hosts
+```
+
 ### From source
 
 ```bash
@@ -47,7 +55,7 @@ git clone https://github.com/karljsamuel/mcp-ecc.git
 cd mcp-ecc
 npm install
 npm run build
-npm run cli -- start
+node packages/cli/dist/bin.js --help
 ```
 
 ---
@@ -68,7 +76,7 @@ Point your client at the HTTP endpoint with your per-user API key (shown in the 
 }
 ```
 
-Agents can read [`SKILL.md`](SKILL.md) or [`llms.txt`](llms.txt) for guided, automated setup.
+Agents can read [`SKILL.md`](https://github.com/karljsamuel/mcp-ecc/blob/main/SKILL.md) or [`llms.txt`](https://github.com/karljsamuel/mcp-ecc/blob/main/llms.txt) for guided, automated setup.
 
 ---
 
@@ -84,6 +92,8 @@ Agents can read [`SKILL.md`](SKILL.md) or [`llms.txt`](llms.txt) for guided, aut
 | **CardDAV** | ❌ | ❌ | ✅ | Password |
 
 > **Microsoft 365:** app passwords are being retired — use OAuth (Microsoft Graph) only.
+
+> **CalDAV/CardDAV compatibility:** the providers implement standard WebDAV (CalDAV RFC 4791, CardDAV RFC 6352) with Basic auth and should work with any standards-compliant server. **Tested against Radicale 3.7.8.** Not tested against other servers; OAuth-only providers (e.g. iCloud without an app-specific password) are not supported.
 
 Deployment notes: Google/Microsoft/Zoho run everywhere; IMAP/SMTP, CalDAV and CardDAV require a Node.js runtime (CLI or Docker), not Cloudflare Workers.
 
@@ -104,17 +114,18 @@ contacts.delete · contacts.search
 accounts.list · accounts.get · accounts.add · accounts.remove · accounts.sync
 ```
 
-Full reference with input schemas: [`docs/mcp-tools.md`](docs/mcp-tools.md)
+Full reference with input schemas: [`docs/mcp-tools.md`](https://github.com/karljsamuel/mcp-ecc/blob/main/docs/mcp-tools.md)
 
 ---
 
 ## Documentation
 
-- **[Getting started](docs/README.md)** — overview and quick start
-- **[Auth & users](docs/auth-users.md)** — multi-user model, bootstrap, per-user API keys
-- **[Accounts & identity](docs/accounts-identity.md)** — name vs slug
-- **Deployment** — [CLI](docs/deployment-cli.md) · [Docker](docs/deployment-docker.md) · [Cloudflare Workers](docs/deployment-cloudflare-workers.md)
-- **Providers** — [Google](docs/providers-google.md) · [Microsoft 365](docs/providers-microsoft.md) · [Zoho](docs/providers-zoho.md) · [IMAP/SMTP](docs/providers-imap-smtp.md) · [CalDAV/CardDAV](docs/providers-caldav-carddav.md)
+- **[Getting started](https://github.com/karljsamuel/mcp-ecc/blob/main/docs/README.md)** — overview and quick start
+- **[CLI reference](https://github.com/karljsamuel/mcp-ecc/blob/main/docs/cli.md)** — every `mcp-ecc` command and workflow
+- **[Auth & users](https://github.com/karljsamuel/mcp-ecc/blob/main/docs/auth-users.md)** — multi-user model, bootstrap, per-user API keys
+- **[Accounts & identity](https://github.com/karljsamuel/mcp-ecc/blob/main/docs/accounts-identity.md)** — name vs slug
+- **Deployment** — [CLI](https://github.com/karljsamuel/mcp-ecc/blob/main/docs/deployment-cli.md) · [Docker](https://github.com/karljsamuel/mcp-ecc/blob/main/docs/deployment-docker.md) · [Cloudflare Workers](https://github.com/karljsamuel/mcp-ecc/blob/main/docs/deployment-cloudflare-workers.md)
+- **Providers** — [Google](https://github.com/karljsamuel/mcp-ecc/blob/main/docs/providers-google.md) · [Microsoft 365](https://github.com/karljsamuel/mcp-ecc/blob/main/docs/providers-microsoft.md) · [Zoho](https://github.com/karljsamuel/mcp-ecc/blob/main/docs/providers-zoho.md) · [IMAP/SMTP](https://github.com/karljsamuel/mcp-ecc/blob/main/docs/providers-imap-smtp.md) · [CalDAV/CardDAV](https://github.com/karljsamuel/mcp-ecc/blob/main/docs/providers-caldav-carddav.md)
 
 ---
 
@@ -122,6 +133,13 @@ Full reference with input schemas: [`docs/mcp-tools.md`](docs/mcp-tools.md)
 
 Feature branches off `dev`; PRs against `dev`. Run `npm run build` to compile all packages. Keep `Changelog.md` and `docs/` in sync.
 
-## License
+## Support & Contributions
 
-[MIT](LICENSE) © 2026 Karl J Samuel
+If you find `mcp-ecc` useful, consider supporting its development:
+
+- **PayPal:** [paypal.me/KarlJosephSamuel](https://paypal.me/KarlJosephSamuel) (`karljsamuel@gmail.com`)
+- **GitHub Sponsors:** [github.sponsors.karljsamuel](https://github.sponsors.karljsamuel)
+
+---
+
+## License

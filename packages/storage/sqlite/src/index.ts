@@ -49,6 +49,7 @@ export class SQLiteStorage implements StorageAdapter {
         scopes TEXT NOT NULL,
         tenantId TEXT,
         accountsServer TEXT,
+        clientType TEXT,
         enabled INTEGER NOT NULL,
         createdAt INTEGER NOT NULL,
         updatedAt INTEGER NOT NULL
@@ -69,6 +70,11 @@ export class SQLiteStorage implements StorageAdapter {
         data TEXT NOT NULL
       );
     `);
+    // Migration for existing databases created before clientType existed
+    const cols = this.db.prepare(`PRAGMA table_info(oauth_clients)`).all() as any[];
+    if (!cols.some((c: any) => c.name === 'clientType')) {
+      this.db.exec(`ALTER TABLE oauth_clients ADD COLUMN clientType TEXT`);
+    }
   }
 
   private encrypt(text: string): string {
@@ -160,8 +166,8 @@ export class SQLiteStorage implements StorageAdapter {
   async saveOAuthClient(client: OAuthClient): Promise<void> {
     const encSecret = this.encrypt(client.clientSecret);
     const stmt = this.db.prepare(`
-      INSERT OR REPLACE INTO oauth_clients (id, ownerId, provider, label, clientId, clientSecret, scopes, tenantId, accountsServer, enabled, createdAt, updatedAt)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT OR REPLACE INTO oauth_clients (id, ownerId, provider, label, clientId, clientSecret, scopes, tenantId, accountsServer, clientType, enabled, createdAt, updatedAt)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     stmt.run(
       client.id,
@@ -173,6 +179,7 @@ export class SQLiteStorage implements StorageAdapter {
       JSON.stringify(client.scopes),
       client.tenantId || null,
       client.accountsServer || null,
+      client.clientType || null,
       client.enabled ? 1 : 0,
       client.createdAt,
       client.updatedAt
@@ -214,6 +221,7 @@ export class SQLiteStorage implements StorageAdapter {
       scopes,
       tenantId: row.tenantId || undefined,
       accountsServer: row.accountsServer || undefined,
+      clientType: row.clientType || undefined,
       enabled: row.enabled === 1,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
