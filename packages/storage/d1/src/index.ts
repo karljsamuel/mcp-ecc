@@ -242,7 +242,22 @@ export class D1Storage implements StorageAdapter {
       CREATE INDEX IF NOT EXISTS idx_calendars_account ON calendars(account_id);
     `;
 
-    await this.db.exec(schema);
+    // Split schema into individual clean statements, stripping comments
+    const statements = schema
+      .split(';')
+      .map(line => line.replace(/--.*$/gm, '').trim())
+      .filter(stmt => stmt.length > 0);
+
+    for (const stmt of statements) {
+      try {
+        await this.db.exec(stmt);
+      } catch (err: any) {
+        // If the error is because a table already exists, we can ignore it
+        if (!err.message?.includes('already exists')) {
+          throw err;
+        }
+      }
+    }
   }
 
   private async encrypt(data: string): Promise<string> {
