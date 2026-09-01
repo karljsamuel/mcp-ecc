@@ -140,6 +140,9 @@ If you find `mcp-ecc` useful, consider supporting its development:
 
 - **PayPal:** [paypal.me/KarlJosephSamuel](https://paypal.me/KarlJosephSamuel) (`karljsamuel@gmail.com`)
 - **GitHub Sponsors:** [github.com/sponsors/karljsamuel](https://github.com/sponsors/karljsamuel)
+- **Ko-fi:** [ko-fi.com/karljsamuel](https://ko-fi.com/karljsamuel)
+- **Patreon:** [patreon.com/karljsamuel](https://patreon.com/karljsamuel)
+- **Buy Me a Coffee:** [buymeacoffee.com/karljsamuel](https://buymeacoffee.com/karljsamuel)
 
 ---
 
