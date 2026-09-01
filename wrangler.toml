@@ -11,4 +11,4 @@ binding = "ASSETS"
 [[d1_databases]]
 binding = "DB"
 database_name = "mcp-ecc"
-database_id = "54705e78-947c-4d0f-a816-ea66eef5c49a"
+database_id = "your-database-id-here"
