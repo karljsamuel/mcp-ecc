@@ -242,10 +242,16 @@ export class D1Storage implements StorageAdapter {
       CREATE INDEX IF NOT EXISTS idx_calendars_account ON calendars(account_id);
     `;
 
-    // Split schema into individual clean statements, stripping comments
-    const statements = schema
+    // Split schema into individual clean statements, stripping comments and formatting newlines
+    const noComments = schema
+      .split('\n')
+      .map(line => line.trim())
+      .filter(line => !line.startsWith('--'))
+      .join('\n');
+
+    const statements = noComments
       .split(';')
-      .map(line => line.replace(/--.*$/gm, '').trim())
+      .map(stmt => stmt.trim())
       .filter(stmt => stmt.length > 0);
 
     for (const stmt of statements) {
