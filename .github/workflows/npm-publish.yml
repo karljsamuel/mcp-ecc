@@ -28,10 +28,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+          registry-url: https://registry.npmjs.org
           cache: npm
-
-      - name: Update npm for Trusted Publishing
-        run: npm install -g npm@latest
 
       - name: Install deps
         run: npm ci --legacy-peer-deps
@@ -53,6 +51,8 @@ jobs:
         run: node scripts/rewrite-file-deps.mjs
 
       - name: Publish internal @mcp-ecc packages
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -e
           for pkg in \
@@ -69,11 +69,13 @@ jobs:
             packages/mcp-server \
             packages/management-api; do
             echo "publishing $pkg"
-            npm publish "./$pkg" --access public --tag beta --provenance
+            npm publish "./$pkg" --access public --tag beta
           done
 
       - name: Publish entry package
-        run: npm publish ./packages/cli --access public --tag beta --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish ./packages/cli --access public --tag beta
 
       - name: Publish to MCP Registry
         if: ${{ github.event.inputs.to_mcp_registry == 'true' }}
