@@ -256,7 +256,7 @@ export class D1Storage implements StorageAdapter {
 
     for (const stmt of statements) {
       try {
-        await this.db.exec(stmt);
+        await this.db.prepare(stmt).run();
       } catch (err: any) {
         // If the error is because a table already exists, we can ignore it
         if (!err.message?.includes('already exists')) {

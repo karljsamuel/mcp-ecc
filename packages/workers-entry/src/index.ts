@@ -139,6 +139,44 @@ app.use('/api/*', async (c, next) => {
   await next();
 });
 
+// --- Root Page ---
+app.get('/', (c) => {
+  const publicUrl = getPublicUrl(c);
+  return c.html(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>mcp-ecc — Email, Calendar & Contacts MCP Server</title>
+  <style>
+    body { font-family: system-ui, -apple-system, sans-serif; max-width: 600px; margin: 4rem auto; padding: 0 1.25rem; line-height: 1.6; color: #1a1a1a; }
+    h1 { font-size: 1.5rem; margin: 0.5rem 0; }
+    p { color: #555; }
+    .card { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 1.25rem; margin-top: 1.5rem; }
+    code { background: #e5e7eb; padding: 0.2rem 0.4rem; border-radius: 4px; font-size: 0.9em; }
+    a { color: #0284c7; text-decoration: none; font-weight: 500; }
+    a:hover { text-decoration: underline; }
+    .badge { display: inline-block; background: #e0f2fe; color: #0369a1; padding: 0.2rem 0.6rem; border-radius: 9999px; font-size: 0.8rem; font-weight: 600; }
+    ul { padding-left: 1.2rem; margin: 0.5rem 0 0; }
+    li { margin: 0.4rem 0; }
+  </style>
+</head>
+<body>
+  <span class="badge">Edge Worker Live</span>
+  <h1>mcp-ecc</h1>
+  <p>Unified Model Context Protocol (MCP) server for Email, Calendar & Contacts (Google, Microsoft 365, Zoho).</p>
+  <div class="card">
+    <strong style="display:block; margin-bottom: 0.5rem;">API Endpoints:</strong>
+    <ul>
+      <li><a href="/health"><code>/health</code></a> — Health check & D1 storage state</li>
+      <li><a href="/api/info"><code>/api/info</code></a> — Server configuration & OAuth URLs</li>
+      <li><a href="/api/bootstrap-status"><code>/api/bootstrap-status</code></a> — First-time setup status</li>
+    </ul>
+  </div>
+</body>
+</html>`);
+});
+
 // --- Health Check ---
 app.get('/health', async (c) => {
   try {
