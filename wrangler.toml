@@ -3,20 +3,8 @@ main = "packages/workers-entry/dist/index.js"
 compatibility_date = "2025-06-01"
 compatibility_flags = ["nodejs_compat"]
 
-[env.vars]
-# Configure all your environment variables (Client IDs, Secrets, MCP_ENCRYPTION_KEY)
-# directly in the Cloudflare Web Dashboard (Settings -> Variables) to keep them secure
-# and prevent them from being overwritten/reset on every git push.
-BASE_URL = "https://mcp-ecc.<your-subdomain>.workers.dev"
-
 # Paste the D1 database_id you get from: wrangler d1 create mcp-ecc  (or the Dashboard)
 [[d1_databases]]
 binding = "DB"
 database_name = "mcp-ecc"
 database_id = "54705e78-947c-4d0f-a816-ea66eef5c49a"
-
-[env.staging]
-BASE_URL = "https://mcp-ecc-staging.yourdomain.workers.dev"
-
-[env.production]
-BASE_URL = "https://mcp-ecc.yourdomain.workers.dev"
