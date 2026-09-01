@@ -1,5 +1,5 @@
 name = "mcp-ecc"
-main = "dist/index.js"
+main = "packages/workers-entry/dist/index.js"
 compatibility_date = "2024-01-01"
 compatibility_flags = ["nodejs_compat"]
 
