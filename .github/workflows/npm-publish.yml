@@ -69,13 +69,13 @@ jobs:
             packages/mcp-server \
             packages/management-api; do
             echo "publishing $pkg"
-            npm publish "./$pkg" --access public --tag beta
+            npm publish "./$pkg" --access public --tag beta || true
           done
 
       - name: Publish entry package
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish ./packages/cli --access public --tag beta
+        run: npm publish ./packages/cli --access public --tag beta || true
 
       - name: Publish to MCP Registry
         if: ${{ github.event.inputs.to_mcp_registry == 'true' }}
