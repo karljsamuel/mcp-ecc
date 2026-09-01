@@ -13,7 +13,7 @@ BASE_URL = "https://mcp-ecc.<your-subdomain>.workers.dev"
 [[d1_databases]]
 binding = "DB"
 database_name = "mcp-ecc"
-database_id = ""
+database_id = "54705e78-947c-4d0f-a816-ea66eef5c49a"
 
 [env.staging]
 BASE_URL = "https://mcp-ecc-staging.yourdomain.workers.dev"
