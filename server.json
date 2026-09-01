@@ -6,12 +6,12 @@
     "url": "https://github.com/karljsamuel/mcp-ecc",
     "source": "github"
   },
-  "version": "0.3.1-beta.1",
+  "version": "0.4.0-beta.1",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "mcp-ecc",
-      "version": "0.3.1-beta.1",
+      "version": "0.4.0-beta.1",
       "transport": {
         "type": "stdio"
       },
