@@ -1,0 +1,48 @@
+{
+  "name": "@mcp-ecc/workers-entry",
+  "version": "0.4.0-beta.1",
+  "description": "Cloudflare Workers entry point for mcp-ecc",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc -w",
+    "clean": "rm -rf dist .tsbuildinfo",
+    "lint": "eslint src --ext .ts",
+    "test": "vitest run",
+    "deploy": "wrangler deploy",
+    "deploy:staging": "wrangler deploy --env staging"
+  },
+  "dependencies": {
+    "@mcp-ecc/core": "file:../core",
+    "@mcp-ecc/mcp-server": "file:../mcp-server",
+    "@mcp-ecc/provider-google": "file:../providers/google",
+    "@mcp-ecc/provider-microsoft": "file:../providers/microsoft",
+    "@mcp-ecc/provider-zoho": "file:../providers/zoho",
+    "@mcp-ecc/storage-d1": "file:../storage/d1",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "hono": "^4.13.5"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "@types/node": "^24.0.0",
+    "@cloudflare/workers-types": "^5.20260829.1",
+    "wrangler": "^4.127.1",
+    "vitest": "^4.1.11",
+    "eslint": "^10.9.1"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "license": "MIT"
+}

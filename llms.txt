@@ -1,0 +1,28 @@
+# mcp-ecc — Email, Calendar & Contacts MCP Server
+
+> A Model Context Protocol (MCP) server that aggregates **email, calendar and contacts** from Google (Gmail/Calendar/People), Microsoft 365 & Outlook (Microsoft Graph), Zoho, IMAP/SMTP, CalDAV and CardDAV. Multi-user server: each user self-manages their own provider accounts and uses their own per-user MCP API key on the `/mcp` Streamable HTTP endpoint.
+
+## Quick start
+
+- Clone: `git clone https://github.com/karljsamuel/mcp-ecc.git && cd mcp-ecc && npm install && npm run build`
+- Run the CLI (stdio): `node packages/cli/dist/bin.js start`
+- Run the single-container server (web UI + REST + MCP on port 3001): `docker compose up -d`
+- MCP endpoint: `http://<host>:3001/mcp` over Streamable HTTP, authenticated with `Authorization: Bearer <user MCP API key>`
+
+## Docs
+
+- [Docs index / README](https://github.com/karljsamuel/mcp-ecc/blob/main/docs/README.md)
+- [MCP Tools reference](https://github.com/karljsamuel/mcp-ecc/blob/main/docs/mcp-tools.md)
+- [Authentication & Users (multi-user, bootstrap, per-user MCP API key)](https://github.com/karljsamuel/mcp-ecc/blob/main/docs/auth-users.md)
+- [Accounts & Identity (name vs slug)](https://github.com/karljsamuel/mcp-ecc/blob/main/docs/accounts-identity.md)
+- [Deployment — Local CLI](https://github.com/karljsamuel/mcp-ecc/blob/main/docs/deployment-cli.md)
+- [Deployment — Docker (single container)](https://github.com/karljsamuel/mcp-ecc/blob/main/docs/deployment-docker.md)
+- [Deployment — Cloudflare Workers](https://github.com/karljsamuel/mcp-ecc/blob/main/docs/deployment-cloudflare-workers.md)
+
+### Providers
+
+- [Google (Gmail, Calendar, Contacts)](https://github.com/karljsamuel/mcp-ecc/blob/main/docs/providers-google.md)
+- [Microsoft 365 / Outlook (Graph)](https://github.com/karljsamuel/mcp-ecc/blob/main/docs/providers-microsoft.md)
+- [Zoho (Mail, Calendar, Contacts)](https://github.com/karljsamuel/mcp-ecc/blob/main/docs/providers-zoho.md)
+- [IMAP / SMTP](https://github.com/karljsamuel/mcp-ecc/blob/main/docs/providers-imap-smtp.md)
+- [CalDAV & CardDAV](https://github.com/karljsamuel/mcp-ecc/blob/main/docs/providers-caldav-carddav.md)

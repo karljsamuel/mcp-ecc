@@ -1,27 +1,55 @@
-FROM node:20-alpine AS builder
+# Single-container image for mcp-ecc.
+# Runs the Management API (Fastify) which serves the web UI, REST/OAuth API and
+# the MCP endpoint (/mcp) in one process on one port.
+#
+# Build:  docker build -t mcp-ecc .
+# Run:    docker run -p 3001:3001 -v $(pwd)/data:/data -e MCP_ENCRYPTION_KEY=... mcp-ecc
+#
+# .dockerignore excludes node_modules/dist/.git so the workspace copies cleanly.
 
+FROM node:24-alpine AS builder
 WORKDIR /app
-COPY package*.json tsconfig.json ./
-RUN npm ci
-COPY src/ ./src/
-RUN npm run build
+RUN npm install -g turbo && apk add --no-cache python3 make g++
 
-FROM node:20-alpine
+# Copy the full repo workspace (source + manifests; node_modules/dist excluded)
+COPY package.json package-lock.json turbo.json ./
+COPY packages/ ./packages/
 
+# Install all workspace dependencies and compile
+RUN npm ci --legacy-peer-deps
+RUN npx turbo run build
+
+# --- runner: minimal image, production deps only ---
+FROM node:24-alpine AS runner
 WORKDIR /app
-COPY package*.json ./
-RUN npm ci --only=production
-COPY --from=builder /app/dist ./dist
 
-# Create location for mapped volume containing token storage
-ENV MCP_STORAGE_FILE=/data/config.json
-RUN mkdir -p /data && chown -R node:node /data
+ENV NODE_ENV=production
+ENV MCP_STORAGE_FILE=/data/mcp-ecc.db
+ENV PORT=3001
+ENV HOST=0.0.0.0
 
-USER node
+# OCI metadata (shown on GHCR and Docker Hub overview)
+LABEL org.opencontainers.image.title="mcp-ecc"
+LABEL org.opencontainers.image.description="MCP server for Email, Calendar & Contacts — Google, Microsoft 365, Zoho, IMAP/SMTP, CalDAV, CardDAV. Multi-user admin UI and per-user MCP API keys."
+LABEL org.opencontainers.image.licenses="MIT"
 
-# Default port exposed for SSE transport mode
-EXPOSE 3000
+RUN addgroup --system --gid 1001 nodejs \
+  && adduser --system --uid 1001 mcp-ecc \
+  && apk add --no-cache python3 make g++
 
-# The container can run in stdio mode by default, or be configured for SSE using arguments
-ENTRYPOINT ["node", "dist/bin.js"]
-CMD ["start"]
+# Copy manifests + full workspace from the builder
+COPY --from=builder /app/package.json ./package.json
+COPY --from=builder /app/package-lock.json ./package-lock.json
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/packages ./packages
+COPY --from=builder /app/turbo.json ./turbo.json
+
+# Keep only production deps (drops dev deps; keeps workspace links + built dist)
+RUN npm prune --omit=dev --ignore-scripts && \
+    mkdir -p /data && chown -R mcp-ecc:nodejs /data
+
+USER mcp-ecc
+
+EXPOSE 3001
+
+ENTRYPOINT ["node", "packages/management-api/dist/bin.js"]

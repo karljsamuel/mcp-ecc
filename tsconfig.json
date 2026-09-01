@@ -8,9 +8,17 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "outDir": "./dist",
-    "rootDir": "./src",
-    "resolveJsonModule": true
+    "resolveJsonModule": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "composite": true,
+    "incremental": true,
+    "tsBuildInfoFile": ".tsbuildinfo",
+    "baseUrl": ".",
+    "paths": {
+      "@mcp-ecc/*": ["packages/*/src"]
+    }
   },
-  "include": ["src/**/*"]
+  "exclude": ["node_modules", "dist", "packages/*/dist", "packages/*/node_modules"]
 }

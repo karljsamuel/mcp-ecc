@@ -1,0 +1,44 @@
+{
+  "name": "mcp-ecc",
+  "version": "0.4.0-beta.1",
+  "mcpName": "io.github.karljsamuel/mcp-ecc",
+  "description": "MCP server for Email, Calendar & Contacts — Google, Microsoft 365, Zoho, IMAP/SMTP, CalDAV, CardDAV",
+  "main": "dist/bin.js",
+  "types": "dist/bin.d.ts",
+  "bin": {
+    "mcp-ecc": "./dist/bin.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/karljsamuel/mcp-ecc.git"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc -w",
+    "clean": "rm -rf dist .tsbuildinfo",
+    "lint": "eslint src --ext .ts",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@mcp-ecc/core": "file:../core",
+    "@mcp-ecc/storage-memory": "file:../storage-memory",
+    "@mcp-ecc/storage-sqlite": "file:../storage/sqlite",
+    "@mcp-ecc/mcp-server": "file:../mcp-server",
+    "commander": "^15.0.0",
+    "chalk": "^6.0.0",
+    "dotenv": "^17.4.2"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "@types/node": "^24.0.0",
+    "vitest": "^4.1.11",
+    "eslint": "^10.9.1"
+  },
+  "license": "MIT"
+}

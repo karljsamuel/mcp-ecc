@@ -1,196 +1,145 @@
-# EMail Calendar Contact MCP Server (mcp-ecc)
+<div align="center">
 
-A comprehensive Model Context Protocol (MCP) server that aggregates email, calendar, and contacts across Google Workspace, Microsoft Graph (Office 365), Zoho Mail, and traditional IMAP/SMTP services. 
+# mcp-ecc
 
-It is specifically architected for **headless, remote, or containerized environments**, featuring OAuth 2.0 Device Authorization Grant (Device Code Flow) support and local encrypted token storage.
+### Email · Calendar · Contacts — one MCP server for all your accounts
 
----
+A Model Context Protocol (MCP) server that lets AI assistants read, write and manage your **email, calendar and contacts** — across **Google, Microsoft 365/Outlook, Zoho, and any IMAP/SMTP, CalDAV or CardDAV account** — from a single interface.
 
-## 1. High-Level Core Architecture
+![License](https://img.shields.io/badge/license-MIT-blue?logo=open-source-initiative&logoColor=white)
+![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)
+![Version](https://img.shields.io/badge/version-0.4.0--beta.1-purple)
+![Node](https://img.shields.io/badge/node-%3E%3D24-339933?logo=nodedotjs&logoColor=white)
+![MCP](https://img.shields.io/badge/Model%20Context%20Protocol-black)
+![Docker](https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white)
+![Multi-arch](https://img.shields.io/badge/arch-amd64%20%7C%20arm64-lightgrey)
 
-```
-  ┌────────────────────────────────────────────────────────┐
-  │                   AI IDE / Agent Host                  │
-  └───────────────────────────┬────────────────────────────┘
-                              │ JSON-RPC 2.0 (stdio / sse)
-                              ▼
-  ┌────────────────────────────────────────────────────────┐
-  │                    Your MCP Server                     │
-  │                                                        │
-  │  ┌──────────────────┐           ┌──────────────────┐   │
-  │  │   MCP Protocol   │           │  Credential/Token│   │
-  │  │  Router (Tools)  │           │     Storage      │   │
-  │  └────────┬─────────┘           └────────┬─────────┘   │
-  │           │                              │             │
-  │           ▼                              ▼             │
-  │  ┌─────────────────────────────────────────────────┐   │
-  │  │               Account Manager                   │   │
-  │  └────┬──────────────┬──────────────┬──────────┬───┘   │
-  └───────┼──────────────┼──────────────┼──────────┼───────┘
-          ▼              ▼              ▼          ▼
-     ┌──────────┐   ┌──────────┐   ┌─────────┐┌──────────┐
-     │  Google  │   │Microsoft │   │  Zoho   ││ IMAP/SMTP│
-     │   API    │   │Graph API │   │   API   ││ Server  │
-     └──────────┘   └──────────┘   └─────────┘└──────────┘
-```
-
-- **MCP Router Layer**: Exposes standardized tools (`email_*`, `calendar_*`, `contacts_*`) and resources (`comms://{accountId}/today-agenda`) using the `@modelcontextprotocol/sdk`.
-- **Account Provider Registry**: Dynamically routes actions to correct integrations based on provider type.
-- **Headless Auth Manager**: Generates device authorization codes, prints user prompts, polls endpoints for tokens, and handles token expiration refreshes automatically.
-- **Encrypted Local Storage**: A JSON file securing tokens with AES-256-GCM.
+</div>
 
 ---
 
-## 2. Prerequisites & Setup
+**mcp-ecc** aggregates your mail, calendar and contacts into standardised MCP tools (`mail.*`, `calendar.*`, `contacts.*`, `accounts.*`) so any MCP client — Claude, Cursor, and others — can work with all of them uniformly.
 
-### Requirements
-- **Node.js** v18+ or v20+
-- **npm** (comes with Node.js)
-
-### Installation
-1. Clone or copy this repository to your target server.
-2. Install the dependencies:
-   ```bash
-   npm install
-   ```
-3. Build the TypeScript source code:
-   ```bash
-   npm run build
-   ```
-
-### Configuration (`.env`)
-The local `.env` file only requires a master encryption key to encrypt token credentials:
-
-```env
-# Encryption Key (Used to encrypt config.json via AES-256-GCM)
-# If omitted, credentials will be stored in plain JSON.
-MCP_ENCRYPTION_KEY=my_secure_encryption_key
-
-# Optional parameters
-# PORT=3000
-# MCP_STORAGE_FILE=./config.json
-```
-
-All OAuth application details (Client ID, Client Secret, and Microsoft Tenant IDs for M365 accounts) are collected interactively during authentication and saved inside the localized `config.json` file per account. This allows multi-tenant, multi-app configurations for different mailboxes.
+- **One OAuth consent** per cloud provider covers mail + calendar + contacts
+- **Multi-user** — users self-manage their own accounts, each with a per-user MCP API key
+- **Credentials encrypted at rest** (AES-256-GCM)
+- **Self-hostable** — single container serving a web admin UI, REST API and the MCP endpoint on one port
 
 ---
 
-## 3. Registering / Authenticating Accounts
+## Quick start
 
-You can register and configure accounts using the interactive CLI tool or directly via the `authenticate_account` tool:
+### Docker
 
-### Method 1: Interactive CLI Tool (Recommended)
-Run the interactive CLI configurator from your terminal:
 ```bash
-npm run configure
+docker run -d --name mcp-ecc \
+  -p 3001:3001 \
+  -e MCP_ENCRYPTION_KEY="$(openssl rand -hex 32)" \
+  karljsamuel/mcp-ecc:beta
 ```
-This utility will prompt you to choose your provider, enter your account identifier, and guide you through the device authorization flow or password setup.
 
-### Method 2: Via MCP Tool Call
-You can also authenticate accounts directly using the `authenticate_account` tool:
+Open **http://localhost:3001** → create the admin account → add your provider accounts.
 
-### A. Google or Microsoft (Device Authorization Grant)
-1. Run `authenticate_account` with the target `provider` (e.g. `"google"` or `"microsoft"`) and your target `accountId` (e.g., `"user@gmail.com"`).
-2. The server will output a terminal instruction:
-   ```
-   Please configure this account by going to: https://google.com/device
-   Enter the code: ABCD-EFGH
-   ```
-3. Open the URL on any device (phone, laptop), log in, and enter the code.
-4. The server polls in the background, obtains the refresh token, encrypts it, and saves it locally.
+### CLI (npm)
 
-### B. IMAP / SMTP (App Passwords)
-For standard email providers (e.g., iCloud, Fastmail, or self-hosted mail servers):
-1. Call `authenticate_account` with `provider: "imap_smtp"`.
-2. Provide your `appPassword` and a `config` object containing the host details:
-   ```json
-   {
-     "provider": "imap_smtp",
-     "accountId": "me@example.com",
-     "appPassword": "abcd-efgh-ijkl-mnop",
-     "config": {
-       "imapHost": "imap.example.com",
-       "imapPort": 993,
-       "imapTls": true,
-       "smtpHost": "smtp.example.com",
-       "smtpPort": 465,
-       "smtpSecure": true
-     }
-   }
-   ```
+```bash
+npm install -g mcp-ecc
+mcp-ecc            # interactive TUI — login, add accounts, manage everything
+mcp-ecc start      # stdio MCP server for agent hosts
+```
+
+### From source
+
+```bash
+git clone https://github.com/karljsamuel/mcp-ecc.git
+cd mcp-ecc
+npm install
+npm run build
+node packages/cli/dist/bin.js --help
+```
 
 ---
 
-## 4. MCP Data Exposure & Functionality
+## Connecting an MCP client
 
-### Resources
-Allows agents to fetch a daily summary instantly.
-- `comms://{accountId}/today-agenda`: Returns a consolidated markdown overview containing today's calendar events and recent unread email counts.
+Point your client at the HTTP endpoint with your per-user API key (shown in the web UI under **Settings**):
 
-### Tools
+```json
+{
+  "mcpServers": {
+    "mcp-ecc": {
+      "type": "http",
+      "url": "http://localhost:3001/mcp",
+      "headers": { "Authorization": "Bearer <your-api-key>" }
+    }
+  }
+}
+```
 
-#### ✉️ Email (`email_*`)
-- `email_list_emails(accountId, folder, limit, query)`: Search or view recent email headers and snippets.
-- `email_get_email(accountId, messageId)`: Fetches clean text body/contents of an email.
-- `email_send_email(accountId, to, subject, body, cc, bcc)`: Dispatches text emails.
-- `email_manage_email(accountId, messageId, action)`: Actions: `archive` | `read` | `unread` | `star`.
-- `email_delete_email(accountId, messageId)`: Trashes or deletes messages.
-
-#### 📅 Calendar (`calendar_*`)
-- `calendar_list_events(accountId, startTime, endTime)`: View scheduled calendar entries.
-- `calendar_create_event(accountId, title, startTime, endTime, description, attendees)`: Inject new appointments.
-- `calendar_update_event(accountId, eventId, patches)`: Patch time/description/attendees.
-- `calendar_delete_event(accountId, eventId)`: Cancel or delete calendar items.
-
-#### 👥 Contacts (`contacts_*`)
-- `contacts_search_contacts(accountId, query)`: Find details by name/keyword.
-- `contacts_create_contact(accountId, name, email, phone)`: Create address book entries.
-- `contacts_delete_contact(accountId, contactId)`: Delete contacts.
+Agents can read [`SKILL.md`](https://github.com/karljsamuel/mcp-ecc/blob/main/SKILL.md) or [`llms.txt`](https://github.com/karljsamuel/mcp-ecc/blob/main/llms.txt) for guided, automated setup.
 
 ---
 
-## 5. Running & Deployment
+## Providers
 
-### A. One-Command Local Installer
-For quick setup and local bin registration, run:
-```bash
-chmod +x install.sh
-./install.sh
-```
-This installs npm packages, compiles TypeScript, copies default environment parameters to `.env`, and registers the `mcp-ecc` command globally.
+| Provider | Mail | Calendar | Contacts | Authentication |
+|----------|:---:|:---:|:---:|------|
+| **Google** (Gmail, Calendar, People) | ✅ | ✅ | ✅ | OAuth 2.0 |
+| **Microsoft 365 / Outlook** (Graph) | ✅ | ✅ | ✅ | OAuth 2.0 |
+| **Zoho** (Mail, Calendar, Contacts) | ✅ | ✅ | ✅ | OAuth 2.0 |
+| **IMAP / SMTP** (any mail server) | ✅ | ❌ | ❌ | App password |
+| **CalDAV** (Nextcloud, Radicale, BAIKAL) | ❌ | ✅ | ❌ | Password |
+| **CardDAV** | ❌ | ❌ | ✅ | Password |
 
-### B. Running locally via CLI (mcp-ecc)
-Once installed or linked, you can execute commands directly:
-- **Configure / Add account**: `mcp-ecc auth`
-- **Re-authenticate account**: `mcp-ecc reauth <account-id>`
-- **Edit account settings**: `mcp-ecc edit-account <account-id>`
-- **Delete account**: `mcp-ecc delete-account <account-id>`
-- **List registered accounts**: `mcp-ecc list-accounts`
-- **Launch Stdio Server (default)**: `mcp-ecc start`
-- **Launch SSE Server**: `mcp-ecc start --sse --port 3001`
+> **Microsoft 365:** app passwords are being retired — use OAuth (Microsoft Graph) only.
 
-### C. Running in Docker (Lightweight Container)
-You can run this server inside a lightweight alpine container. Credentials and settings persist on your host machine.
+> **CalDAV/CardDAV compatibility:** the providers implement standard WebDAV (CalDAV RFC 4791, CardDAV RFC 6352) with Basic auth and should work with any standards-compliant server. **Tested against Radicale 3.7.8.** Not tested against other servers; OAuth-only providers (e.g. iCloud without an app-specific password) are not supported.
 
-#### Build the image:
-```bash
-docker build -t mcp-ecc .
-```
+Deployment notes: Google/Microsoft/Zoho run everywhere; IMAP/SMTP, CalDAV and CardDAV require a Node.js runtime (CLI or Docker), not Cloudflare Workers.
 
-#### Run with Stdio (Attached to an Agent Host process):
-```bash
-docker run -i --rm -v $(pwd)/data:/data mcp-ecc start
-```
-*Note: The `-i` flag ensures standard input and output streams are kept open for stdio JSON-RPC communication.*
+---
 
-#### Run with Server-Sent Events (SSE / HTTP):
-```bash
-docker run -d --name mcp-ecc -p 3001:3001 -v $(pwd)/data:/data -e PORT=3001 -e MCP_ENCRYPTION_KEY=your_key mcp-ecc start --sse
+## MCP tools
+
+```text
+mail.listFolders · mail.listMessages · mail.getMessage · mail.sendMessage
+mail.searchMessages · mail.moveMessage · mail.setFlags · mail.deleteMessage
+
+calendar.listCalendars · calendar.listEvents · calendar.getEvent · calendar.freeBusy
+calendar.createEvent · calendar.updateEvent · calendar.deleteEvent
+
+contacts.list · contacts.get · contacts.create · contacts.update
+contacts.delete · contacts.search
+
+accounts.list · accounts.get · accounts.add · accounts.remove · accounts.sync
 ```
 
-#### Using Docker Compose:
-To spin it up quickly in background HTTP mode:
-```bash
-docker compose up -d
-```
-All account credentials will be persisted inside the `./data` directory on the host.
+Full reference with input schemas: [`docs/mcp-tools.md`](https://github.com/karljsamuel/mcp-ecc/blob/main/docs/mcp-tools.md)
+
+---
+
+## Documentation
+
+- **[Getting started](https://github.com/karljsamuel/mcp-ecc/blob/main/docs/README.md)** — overview and quick start
+- **[CLI reference](https://github.com/karljsamuel/mcp-ecc/blob/main/docs/cli.md)** — every `mcp-ecc` command and workflow
+- **[Auth & users](https://github.com/karljsamuel/mcp-ecc/blob/main/docs/auth-users.md)** — multi-user model, bootstrap, per-user API keys
+- **[Accounts & identity](https://github.com/karljsamuel/mcp-ecc/blob/main/docs/accounts-identity.md)** — name vs slug
+- **Deployment** — [CLI](https://github.com/karljsamuel/mcp-ecc/blob/main/docs/deployment-cli.md) · [Docker](https://github.com/karljsamuel/mcp-ecc/blob/main/docs/deployment-docker.md) · [Cloudflare Workers](https://github.com/karljsamuel/mcp-ecc/blob/main/docs/deployment-cloudflare-workers.md)
+- **Providers** — [Google](https://github.com/karljsamuel/mcp-ecc/blob/main/docs/providers-google.md) · [Microsoft 365](https://github.com/karljsamuel/mcp-ecc/blob/main/docs/providers-microsoft.md) · [Zoho](https://github.com/karljsamuel/mcp-ecc/blob/main/docs/providers-zoho.md) · [IMAP/SMTP](https://github.com/karljsamuel/mcp-ecc/blob/main/docs/providers-imap-smtp.md) · [CalDAV/CardDAV](https://github.com/karljsamuel/mcp-ecc/blob/main/docs/providers-caldav-carddav.md)
+
+---
+
+## Contributing
+
+Feature branches off `dev`; PRs against `dev`. Run `npm run build` to compile all packages. Keep `Changelog.md` and `docs/` in sync.
+
+## Support & Contributions
+
+If you find `mcp-ecc` useful, consider supporting its development:
+
+- **PayPal:** [paypal.me/KarlJosephSamuel](https://paypal.me/KarlJosephSamuel) (`karljsamuel@gmail.com`)
+- **GitHub Sponsors:** [github.sponsors.karljsamuel](https://github.sponsors.karljsamuel)
+
+---
+
+## License

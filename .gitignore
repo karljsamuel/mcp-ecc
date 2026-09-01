@@ -2,6 +2,9 @@ node_modules/
 dist/
 config.json
 .env
+data/
+*.db
+*.sqlite
 .mcp-tokens.json
 E:\\WebDesignProjects\\mcp-email-calendar-contacts\\config.json
 npm-debug.log*
@@ -10,3 +13,11 @@ yarn-error.log*
 .DS_Store
 .idea/
 .vscode/
+.turbo/
+*.tsbuildinfo
+# Compiled artifacts accidentally emitted into src (should not exist; keep ignored)
+packages/*/src/*.js
+packages/*/src/*.d.ts
+packages/*/src/*.map
+# Local MCP integration test harnesses (dev-only; rewrite-file-deps.mjs stays tracked)
+scripts/mcp-*.cjs

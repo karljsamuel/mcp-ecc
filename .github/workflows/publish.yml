@@ -14,42 +14,77 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
       - name: Extract metadata (tags, labels) for Docker
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
-          images: ghcr.io/${{ github.repository_owner }}/mcp-ecc
+          images: |
+            ghcr.io/${{ github.repository_owner }}/mcp-ecc
+            ${{ vars.DOCKERHUB_REPO || secrets.DOCKERHUB_USERNAME || 'karljsamuel' }}/mcp-ecc
           tags: |
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main' }}
+            type=raw,value=beta,enable=${{ contains(github.ref_name, 'beta') }}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=sha,prefix=
 
       - name: Build and push Docker image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
           push: true
+          platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Sync README to Docker Hub overview
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          set -e
+          if [ -z "$DOCKERHUB_TOKEN" ]; then
+            echo "No DOCKERHUB_TOKEN secret; skipping Docker Hub overview sync"
+            exit 0
+          fi
+          REPO="$DOCKERHUB_USERNAME/mcp-ecc"
+          # Exchange the access token for a Docker Hub JWT
+          JWT=$(curl -s -H "Content-Type: application/json" \
+            -d "{\"username\":\"$DOCKERHUB_USERNAME\",\"password\":\"$DOCKERHUB_TOKEN\"}" \
+            "https://hub.docker.com/v2/users/login/" \
+            | python3 -c "import sys,json;print(json.load(sys.stdin)['token'])")
+          # JSON-encode the README and PATCH the repository's full_description
+          python3 -c "import json,sys; json.dump({'full_description': open('README.md').read()}, open('/tmp/dhdesc.json','w'))"
+          curl -s -X PATCH "https://hub.docker.com/v2/repositories/${REPO}/" \
+            -H "Authorization: JWT $JWT" -H "Content-Type: application/json" \
+            -d @/tmp/dhdesc.json
+          echo
+          echo "Docker Hub overview updated for ${REPO}"
