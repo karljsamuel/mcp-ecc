@@ -88,6 +88,7 @@ export class D1Storage implements StorageAdapter {
         scopes_json TEXT NOT NULL,
         tenant_id TEXT,
         accounts_server TEXT,
+        client_type TEXT,
         enabled INTEGER NOT NULL DEFAULT 1,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,

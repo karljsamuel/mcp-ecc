@@ -20,18 +20,62 @@ interface Env {
 
 const app = new Hono<{ Bindings: Env }>();
 
+// Lazy, cached schema initialisation. Workers are stateless per-request, so we
+// cache the init promise per isolate (once per cold start) and await it before
+// any DB access. CREATE TABLE IF NOT EXISTS makes it safe and idempotent.
+let schemaInitPromise: Promise<void> | null = null;
+function ensureSchema(storage: D1Storage): Promise<void> {
+  if (!schemaInitPromise) {
+    schemaInitPromise = storage.initSchema().catch((e) => {
+      schemaInitPromise = null; // allow retry on next request if this fails
+      throw e;
+    });
+  }
+  return schemaInitPromise;
+}
+
 app.use('*', cors());
 
-// Initialize storage and services per request (Workers are stateless)
+// Ensure D1 schema exists before any /api or /oauth request touches the DB.
+app.use('/api/*', async (c, next) => {
+  await ensureSchema(new D1Storage(c.env.DB, c.env.MCP_ENCRYPTION_KEY));
+  await next();
+});
+app.use('/oauth/*', async (c, next) => {
+  await ensureSchema(new D1Storage(c.env.DB, c.env.MCP_ENCRYPTION_KEY));
+  await next();
+});
 function createServices(env: Env) {
   const storage = new D1Storage(env.DB, env.MCP_ENCRYPTION_KEY);
   const oauthManager = new OAuthManager(storage);
   const mcpServer = new McpEccServer(storage);
-  return { storage, oauthManager, mcpServer };
+  // Ensure the schema exists before any request touches the DB.
+  // Fire-and-forget is unsafe, so we return the promise for callers to await.
+  const schemaReady = ensureSchema(storage);
+  return { storage, oauthManager, mcpServer, schemaReady };
 }
 
 // Health check
-app.get('/health', (c) => c.json({ status: 'ok', timestamp: Date.now() }));
+app.get('/health', async (c) => {
+  const { storage } = createServices(c.env);
+  try {
+    await storage.initSchema();
+    return c.json({ status: 'ok', timestamp: Date.now(), storage: 'd1', schema: 'initialized' });
+  } catch (e: any) {
+    return c.json({ status: 'error', timestamp: Date.now(), error: e.message }, 500);
+  }
+});
+
+// Bootstrap: initialise the D1 schema on demand (idempotent - uses CREATE TABLE IF NOT EXISTS)
+app.post('/api/bootstrap', async (c) => {
+  const { storage } = createServices(c.env);
+  try {
+    await storage.initSchema();
+    return c.json({ success: true, message: 'D1 schema initialised' });
+  } catch (e: any) {
+    return c.json({ success: false, error: e.message }, 500);
+  }
+});
 
 // MCP SSE endpoint (for HTTP transport)
 // Note: The MCP SDK's SSE transport requires Node's ServerResponse, which is not

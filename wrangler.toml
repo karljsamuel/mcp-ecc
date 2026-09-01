@@ -1,18 +1,19 @@
 name = "mcp-ecc"
 main = "packages/workers-entry/dist/index.js"
-compatibility_date = "2024-01-01"
+compatibility_date = "2025-06-01"
 compatibility_flags = ["nodejs_compat"]
 
-[env]
-MCP_ENCRYPTION_KEY = ""
+[env.vars]
+MCP_ENCRYPTION_KEY = ""          # set via dashboard/secret; openssl rand -hex 32
 GOOGLE_CLIENT_ID = ""
-GOOGLE_CLIENT_SECRET = ""
+GOOGLE_CLIENT_SECRET = ""        # set via secret
 MICROSOFT_CLIENT_ID = ""
-MICROSOFT_CLIENT_SECRET = ""
+MICROSOFT_CLIENT_SECRET = ""     # set via secret
 ZOHO_CLIENT_ID = ""
-ZOHO_CLIENT_SECRET = ""
-BASE_URL = "https://mcp-ecc.yourdomain.workers.dev"
+ZOHO_CLIENT_SECRET = ""          # set via secret
+BASE_URL = "https://mcp-ecc.<your-subdomain>.workers.dev"
 
+# Paste the D1 database_id you get from: wrangler d1 create mcp-ecc  (or the Dashboard)
 [[d1_databases]]
 binding = "DB"
 database_name = "mcp-ecc"
