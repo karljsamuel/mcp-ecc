@@ -3,6 +3,10 @@ main = "packages/workers-entry/dist/index.js"
 compatibility_date = "2025-06-01"
 compatibility_flags = ["nodejs_compat"]
 
+[assets]
+directory = "packages/admin-ui/dist"
+binding = "ASSETS"
+
 # Paste the D1 database_id you get from: wrangler d1 create mcp-ecc  (or the Dashboard)
 [[d1_databases]]
 binding = "DB"
