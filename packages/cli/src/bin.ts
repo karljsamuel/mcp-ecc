@@ -6,7 +6,7 @@ import readline from 'readline';
 import { createServer } from 'http';
 import { randomUUID } from 'crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from 'fs';
-import { execFile } from 'child_process';
+import { execFile, spawn } from 'child_process';
 import * as path from 'path';
 import { AuthService, OAuthManager, OAuthClient, ProviderName } from '@mcp-ecc/core';
 import { McpEccServer } from '@mcp-ecc/mcp-server';
@@ -1109,15 +1109,22 @@ async function runTui(): Promise<void> {
       return;
     }
 
-    // Re-dispatch the command in a subprocess so its own readline prompts work
-    // cleanly on stdin without conflicting with this TUI loop.
+    // Re-dispatch the command in a subprocess with inherited stdio so its interactive prompts
+    // (like askQuestion/askPassword) work perfectly on the user's terminal.
+    rl.pause();
     await new Promise<void>((resolve) => {
-      execFile(process.execPath, [process.argv[1], ...argv], (err, stdout, stderr) => {
-        if (stdout) process.stdout.write(stdout);
-        if (stderr) process.stdout.write(stderr);
+      const child = spawn(process.execPath, [process.argv[1], ...argv], {
+        stdio: 'inherit',
+      });
+      child.on('close', () => {
+        resolve();
+      });
+      child.on('error', (err) => {
+        console.error(chalk.red(`Failed to execute command: ${err.message}`));
         resolve();
       });
     });
+    rl.resume();
     prompt();
   });
 
