@@ -42,6 +42,10 @@ try {
     storage = new D1Storage(db, ENCRYPTION_KEY);
     storageName = 'cloudflare-d1';
     console.log(`[mcp-ecc] Cloudflare D1 storage initialized (DB: ${databaseId})`);
+    
+    // Automatically initialize schema on Cloudflare D1
+    await storage.initSchema();
+    console.log('[mcp-ecc] Cloudflare D1 schema verified and initialized.');
   } else {
     const STORAGE_FILE = process.env.MCP_STORAGE_FILE;
     if (!STORAGE_FILE) {

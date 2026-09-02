@@ -44,6 +44,9 @@ if (DB_PROVIDER === 'd1') {
   if (!existsSync(dbDir)) {
     mkdirSync(dbDir, { recursive: true });
   }
+  
+  // Automatically initialize schema on Cloudflare D1
+  await storage.initSchema();
 } else {
   const STORAGE_FILE = process.env.MCP_STORAGE_FILE;
   if (!STORAGE_FILE) {
