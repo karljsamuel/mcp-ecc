@@ -19,7 +19,9 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@mcp-ecc/core": "file:../../core"
+    "@mcp-ecc/core": "file:../../core",
+    "crypto-js": "^4.2.0",
+    "@types/crypto-js": "^4.2.0"
   },
   "devDependencies": {
     "typescript": "^5.9.3",

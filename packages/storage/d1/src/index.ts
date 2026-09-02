@@ -14,6 +14,7 @@ import type {
   User,
 } from '@mcp-ecc/core';
 import { generateId } from '@mcp-ecc/core';
+import CryptoJS from 'crypto-js';
 
 export interface D1Database {
   prepare(query: string): D1PreparedStatement;
@@ -172,33 +173,11 @@ class CloudflareD1PreparedStatement implements D1PreparedStatement {
 
 export class D1Storage implements StorageAdapter {
   private db: D1Database;
-  private encryptionKey: Promise<CryptoKey> | CryptoKey;
+  private encryptionKey: string;
 
   constructor(db: D1Database, encryptionKey?: string) {
     this.db = db;
-    // In Workers, we'd use Web Crypto API
-    // For now, store the key material - actual encryption would use subtle crypto
-    this.encryptionKey = encryptionKey ? 
-      this.deriveKey(encryptionKey) :
-      this.generateKey();
-  }
-
-  private async deriveKey(keyMaterial: string): Promise<CryptoKey> {
-    const rawKey = new TextEncoder().encode(keyMaterial);
-    // Hash using SHA-256 to guarantee a perfect 256-bit (32-byte) key length
-    const hash = await crypto.subtle.digest('SHA-256', rawKey);
-    return crypto.subtle.importKey('raw', hash, 'AES-GCM', false, ['encrypt', 'decrypt']);
-  }
-
-  private async getEncryptionKey(): Promise<CryptoKey> {
-    if (this.encryptionKey instanceof Promise) {
-      this.encryptionKey = await this.encryptionKey;
-    }
-    return this.encryptionKey;
-  }
-
-  private async generateKey(): Promise<CryptoKey> {
-    return crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']);
+    this.encryptionKey = encryptionKey || 'default-secret-key';
   }
 
   async initSchema(): Promise<void> {
@@ -405,29 +384,12 @@ export class D1Storage implements StorageAdapter {
   }
 
   private async encrypt(data: string): Promise<string> {
-    const iv = crypto.getRandomValues(new Uint8Array(12));
-    const encoded = new TextEncoder().encode(data);
-    const encrypted = await crypto.subtle.encrypt(
-      { name: 'AES-GCM', iv },
-      await this.getEncryptionKey(),
-      encoded
-    );
-    const result = new Uint8Array(iv.length + encrypted.byteLength);
-    result.set(iv);
-    result.set(new Uint8Array(encrypted), iv.length);
-    return btoa(String.fromCharCode(...result));
+    return CryptoJS.AES.encrypt(data, this.encryptionKey).toString();
   }
 
   private async decrypt(encryptedData: string): Promise<string> {
-    const data = new Uint8Array(atob(encryptedData).split('').map(c => c.charCodeAt(0)));
-    const iv = data.slice(0, 12);
-    const encrypted = data.slice(12);
-    const decrypted = await crypto.subtle.decrypt(
-      { name: 'AES-GCM', iv },
-      await this.getEncryptionKey(),
-      encrypted
-    );
-    return new TextDecoder().decode(decrypted);
+    const bytes = CryptoJS.AES.decrypt(encryptedData, this.encryptionKey);
+    return bytes.toString(CryptoJS.enc.Utf8);
   }
 
   // Account management
@@ -973,12 +935,8 @@ export class D1Storage implements StorageAdapter {
   }
 
   private decryptSync(encryptedData: string): string {
-    // Synchronous version for mapping - would need async version in real use
-    const data = new Uint8Array(atob(encryptedData).split('').map(c => c.charCodeAt(0)));
-    const iv = data.slice(0, 12);
-    const encrypted = data.slice(12);
-    // Note: In real implementation, this would be async
-    return ''; // Placeholder
+    const bytes = CryptoJS.AES.decrypt(encryptedData, this.encryptionKey);
+    return bytes.toString(CryptoJS.enc.Utf8);
   }
 
   private mapMailMessage(row: any): EmailMessage {
