@@ -179,8 +179,15 @@ export class D1Storage implements StorageAdapter {
     // In Workers, we'd use Web Crypto API
     // For now, store the key material - actual encryption would use subtle crypto
     this.encryptionKey = encryptionKey ? 
-      crypto.subtle.importKey('raw', new TextEncoder().encode(encryptionKey), 'AES-GCM', false, ['encrypt', 'decrypt']) :
+      this.deriveKey(encryptionKey) :
       this.generateKey();
+  }
+
+  private async deriveKey(keyMaterial: string): Promise<CryptoKey> {
+    const rawKey = new TextEncoder().encode(keyMaterial);
+    // Hash using SHA-256 to guarantee a perfect 256-bit (32-byte) key length
+    const hash = await crypto.subtle.digest('SHA-256', rawKey);
+    return crypto.subtle.importKey('raw', hash, 'AES-GCM', false, ['encrypt', 'decrypt']);
   }
 
   private async getEncryptionKey(): Promise<CryptoKey> {
