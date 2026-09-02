@@ -108,34 +108,36 @@ const askQuestion = (rl: readline.Interface, query: string): Promise<string> => 
 
 const askPassword = (rl: readline.Interface, query: string): Promise<string> => {
   return new Promise(resolve => {
-    const stdin = process.stdin as any;
-    const stdout = process.stdout as any;
-    stdout.write(query);
-    stdin.resume();
-    stdin.setRawMode(true);
-    let password = '';
-    const onData = (char: Buffer) => {
-      const c = char.toString('utf8');
-      if (c === '\n' || c === '\r' || c === '\r\n') {
-        stdin.setRawMode(false);
-        stdin.removeListener('data', onData);
-        stdout.write('\n');
-        resolve(password);
-      } else if (c === '\u0003') { // Ctrl+C
-        stdin.setRawMode(false);
-        stdin.removeListener('data', onData);
-        process.exit(0);
-      } else if (char[0] === 127 || char[0] === 8) { // Backspace
-        if (password.length > 0) {
-          password = password.slice(0, -1);
-          stdout.write('\b \b');
-        }
-      } else {
-        password += c;
-        stdout.write('*');
+    const stdoutWrite = process.stdout.write;
+    let isPromptDone = false;
+
+    (process.stdout as any).write = (chunk: any, encoding?: any, callback?: any) => {
+      if (isPromptDone) {
+        return stdoutWrite.call(process.stdout, chunk, encoding, callback);
       }
+
+      const str = chunk.toString();
+
+      // Write query, newlines, and escape codes normally
+      if (str.includes(query) || str === '\n' || str === '\r' || str === '\r\n' || str.startsWith('\x1b')) {
+        return stdoutWrite.call(process.stdout, chunk, encoding, callback);
+      }
+
+      // Write backspace normally
+      if (str === '\b \b') {
+        return stdoutWrite.call(process.stdout, chunk, encoding, callback);
+      }
+
+      // Write asterisks for password characters
+      const asterisks = '*'.repeat(str.length);
+      return stdoutWrite.call(process.stdout, asterisks, encoding, callback);
     };
-    stdin.on('data', onData);
+
+    rl.question(query, (password) => {
+      isPromptDone = true;
+      (process.stdout as any).write = stdoutWrite; // restore stdout
+      resolve(password);
+    });
   });
 };
 
