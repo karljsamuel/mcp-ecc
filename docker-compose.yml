@@ -38,6 +38,8 @@ services:
       SESSION_SECRET: ${SESSION_SECRET:-}
       # Internal container port (do not change)
       PORT: "3001"
+      # Indicator for Docker container environment
+      IS_DOCKER: "true"
       # Database Provider (MANDATORY): sqlite or d1
       MCP_DB_PROVIDER: ${MCP_DB_PROVIDER}
       # Local SQLite database file path (MANDATORY when MCP_DB_PROVIDER is sqlite)
