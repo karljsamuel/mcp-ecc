@@ -12,7 +12,17 @@ import { AuthService, OAuthManager, OAuthClient, ProviderName } from '@mcp-ecc/c
 import { McpEccServer } from '@mcp-ecc/mcp-server';
 
 const ENCRYPTION_KEY = process.env.MCP_ENCRYPTION_KEY || 'default-secret-key';
-const DB_PROVIDER = process.env.MCP_DB_PROVIDER || process.env.DB_PROVIDER || 'sqlite';
+const DB_PROVIDER = process.env.MCP_DB_PROVIDER || process.env.DB_PROVIDER;
+
+if (!DB_PROVIDER) {
+  console.error(chalk.red('[mcp-ecc] Critical Error: MCP_DB_PROVIDER is not set. Please set MCP_DB_PROVIDER to either "sqlite" or "d1" in your environment.'));
+  process.exit(1);
+}
+
+if (DB_PROVIDER !== 'sqlite' && DB_PROVIDER !== 'd1') {
+  console.error(chalk.red(`[mcp-ecc] Critical Error: Invalid MCP_DB_PROVIDER value: "${DB_PROVIDER}". Allowed values are "sqlite" or "d1".`));
+  process.exit(1);
+}
 
 let storage: any;
 let storageName = 'sqlite';
@@ -35,7 +45,11 @@ if (DB_PROVIDER === 'd1') {
     mkdirSync(dbDir, { recursive: true });
   }
 } else {
-  const STORAGE_FILE = process.env.MCP_STORAGE_FILE || path.join(process.cwd(), 'data', 'mcp-ecc.db');
+  const STORAGE_FILE = process.env.MCP_STORAGE_FILE;
+  if (!STORAGE_FILE) {
+    console.error(chalk.red('[mcp-ecc] Critical Error: sqlite provider selected but MCP_STORAGE_FILE is not set. Please configure the database file path.'));
+    process.exit(1);
+  }
   dbDir = path.dirname(STORAGE_FILE);
   if (!existsSync(dbDir)) {
     mkdirSync(dbDir, { recursive: true });

@@ -14,10 +14,20 @@ const PUBLIC_URL = process.env.PUBLIC_URL || process.env.BASE_URL || `http://loc
 const SESSION_SECRET = process.env.SESSION_SECRET;
 const ENCRYPTION_KEY = process.env.MCP_ENCRYPTION_KEY;
 
-// Storage: SQLite, D1 or Memory fallback.
+// Storage: SQLite, D1.
 let storage;
 let storageName = 'sqlite';
-const DB_PROVIDER = process.env.MCP_DB_PROVIDER || process.env.DB_PROVIDER || 'sqlite';
+const DB_PROVIDER = process.env.MCP_DB_PROVIDER || process.env.DB_PROVIDER;
+
+if (!DB_PROVIDER) {
+  console.error('[mcp-ecc] Critical Error: MCP_DB_PROVIDER is not set. Please set MCP_DB_PROVIDER to either "sqlite" or "d1" in your environment.');
+  process.exit(1);
+}
+
+if (DB_PROVIDER !== 'sqlite' && DB_PROVIDER !== 'd1') {
+  console.error(`[mcp-ecc] Critical Error: Invalid MCP_DB_PROVIDER value: "${DB_PROVIDER}". Allowed values are "sqlite" or "d1".`);
+  process.exit(1);
+}
 
 try {
   if (DB_PROVIDER === 'd1') {
@@ -33,8 +43,11 @@ try {
     storageName = 'cloudflare-d1';
     console.log(`[mcp-ecc] Cloudflare D1 storage initialized (DB: ${databaseId})`);
   } else {
+    const STORAGE_FILE = process.env.MCP_STORAGE_FILE;
+    if (!STORAGE_FILE) {
+      throw new Error('sqlite provider selected but MCP_STORAGE_FILE is not set. Please configure the database file path.');
+    }
     const { SQLiteStorage } = await import('@mcp-ecc/storage-sqlite');
-    const STORAGE_FILE = process.env.MCP_STORAGE_FILE || join(process.cwd(), 'data', 'mcp-ecc.db');
     const dbDir = dirname(STORAGE_FILE);
     if (!existsSync(dbDir)) {
       mkdirSync(dbDir, { recursive: true });

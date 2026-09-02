@@ -38,10 +38,10 @@ services:
       SESSION_SECRET: ${SESSION_SECRET:-}
       # Internal container port (do not change)
       PORT: "3001"
-      # Database Provider: sqlite or d1 (defaults to sqlite if empty/unset)
-      MCP_DB_PROVIDER: ${MCP_DB_PROVIDER:-sqlite}
-      # Local SQLite database file path (active ONLY when MCP_DB_PROVIDER is sqlite/unset)
-      MCP_STORAGE_FILE: ${MCP_STORAGE_FILE:-/data/mcp-ecc.db}
+      # Database Provider (MANDATORY): sqlite or d1
+      MCP_DB_PROVIDER: ${MCP_DB_PROVIDER}
+      # Local SQLite database file path (MANDATORY when MCP_DB_PROVIDER is sqlite)
+      MCP_STORAGE_FILE: ${MCP_STORAGE_FILE}
       # Centralized Cloudflare D1 Credentials (MANDATORY when MCP_DB_PROVIDER is d1; ignored for sqlite)
       CLOUDFLARE_ACCOUNT_ID: ${CLOUDFLARE_ACCOUNT_ID:-}
       CLOUDFLARE_DATABASE_ID: ${CLOUDFLARE_DATABASE_ID:-}
