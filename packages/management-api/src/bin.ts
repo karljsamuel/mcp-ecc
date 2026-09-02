@@ -44,10 +44,8 @@ try {
     console.log(`[mcp-ecc] SQLite storage initialized at ${STORAGE_FILE}`);
   }
 } catch (e: any) {
-  const { MemoryStorage } = await import('@mcp-ecc/storage-memory');
-  storage = new MemoryStorage();
-  storageName = 'memory';
-  console.warn(`Storage provider initialization failed, falling back to in-memory: ${e.message}`);
+  console.error(`[mcp-ecc] Critical: Storage provider initialization failed: ${e.message}`);
+  process.exit(1);
 }
 
 // Bootstrap guidance: if no users exist, the web UI shows the create-admin screen.

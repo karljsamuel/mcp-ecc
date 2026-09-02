@@ -22,7 +22,6 @@
   "exclude": ["node_modules", "dist"],
   "references": [
     { "path": "../core" },
-    { "path": "../storage/memory" },
     { "path": "../storage/sqlite" },
     { "path": "../storage/d1" },
     { "path": "../mcp-server" }

@@ -23,7 +23,6 @@
   "references": [
     { "path": "../core" },
     { "path": "../mcp-server" },
-    { "path": "../storage/sqlite" },
-    { "path": "../storage/memory" }
+    { "path": "../storage/sqlite" }
   ]
 }

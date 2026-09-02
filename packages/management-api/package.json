@@ -28,7 +28,6 @@
     "@mcp-ecc/mcp-server": "file:../mcp-server",
     "@mcp-ecc/storage-sqlite": "file:../storage/sqlite",
     "@mcp-ecc/storage-d1": "file:../storage/d1",
-    "@mcp-ecc/storage-memory": "file:../storage/memory",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "fastify": "^5.12.0",
     "@fastify/websocket": "^11.3.0",
