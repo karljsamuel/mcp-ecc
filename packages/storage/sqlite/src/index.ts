@@ -82,8 +82,14 @@ export class SQLiteStorage implements StorageAdapter {
   }
 
   private decrypt(ciphertext: string): string {
-    const bytes = CryptoJS.AES.decrypt(ciphertext, this.encryptionKey);
-    return bytes.toString(CryptoJS.enc.Utf8);
+    if (!ciphertext) return '';
+    try {
+      const bytes = CryptoJS.AES.decrypt(ciphertext, this.encryptionKey);
+      return bytes.toString(CryptoJS.enc.Utf8) || '';
+    } catch (e: any) {
+      console.warn('[mcp-ecc] Failed to decrypt SQLite data:', e.message);
+      return '';
+    }
   }
 
   // --- Account management ---

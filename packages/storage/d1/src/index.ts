@@ -388,8 +388,14 @@ export class D1Storage implements StorageAdapter {
   }
 
   private async decrypt(encryptedData: string): Promise<string> {
-    const bytes = CryptoJS.AES.decrypt(encryptedData, this.encryptionKey);
-    return bytes.toString(CryptoJS.enc.Utf8);
+    if (!encryptedData) return '';
+    try {
+      const bytes = CryptoJS.AES.decrypt(encryptedData, this.encryptionKey);
+      return bytes.toString(CryptoJS.enc.Utf8) || '';
+    } catch (e: any) {
+      console.warn('[mcp-ecc] Failed to decrypt D1 data asynchronously:', e.message);
+      return '';
+    }
   }
 
   // Account management
@@ -935,8 +941,14 @@ export class D1Storage implements StorageAdapter {
   }
 
   private decryptSync(encryptedData: string): string {
-    const bytes = CryptoJS.AES.decrypt(encryptedData, this.encryptionKey);
-    return bytes.toString(CryptoJS.enc.Utf8);
+    if (!encryptedData) return '';
+    try {
+      const bytes = CryptoJS.AES.decrypt(encryptedData, this.encryptionKey);
+      return bytes.toString(CryptoJS.enc.Utf8) || '';
+    } catch (e: any) {
+      console.warn('[mcp-ecc] Failed to decrypt D1 data synchronously:', e.message);
+      return '';
+    }
   }
 
   private mapMailMessage(row: any): EmailMessage {
