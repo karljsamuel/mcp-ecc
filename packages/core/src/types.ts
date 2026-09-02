@@ -66,6 +66,7 @@ export interface OAuthClient {
   // 'public' = Desktop / Non-browser / Installed app (no client secret on refresh)
   // 'confidential' = Web app / server-side (client secret required)
   clientType?: 'public' | 'confidential';
+  clientPlatform?: 'desktop' | 'web' | 'limited_input';
   enabled: boolean;
   createdAt: number;
   updatedAt: number;

@@ -223,6 +223,16 @@ export class ManagementApi {
           oauthClient = clients.find((c) => c.provider === provider && c.enabled) || null;
         }
         if (oauthClient) {
+          // Resolve sibling web client if available under same name
+          const sibling = (await this.storage.listOAuthClients(ownerId)).find(c => 
+            c.provider === oauthClient!.provider &&
+            c.label === oauthClient!.label &&
+            c.clientPlatform === 'web' &&
+            c.enabled
+          );
+          if (sibling) {
+            oauthClient = sibling;
+          }
           const redirectUri = `${this.publicUrl}/oauth/callback`;
           const flow = await this.oauthManager.startFlow(provider as ProviderName, 'device_code', OAuthManager.clientToConfig(oauthClient, redirectUri));
           await this.storage.updateCredentials(account.id, { oauthClientId: oauthClient.id });
@@ -272,6 +282,18 @@ export class ManagementApi {
       if (!client) {
         const clients = await this.storage.listOAuthClients(request.user.id);
         client = clients.find((c) => c.provider === account.provider && c.enabled) || null;
+      }
+      if (client) {
+        // Resolve sibling web client if available under same name
+        const sibling = (await this.storage.listOAuthClients(request.user.id)).find(c => 
+          c.provider === client!.provider &&
+          c.label === client!.label &&
+          c.clientPlatform === 'web' &&
+          c.enabled
+        );
+        if (sibling) {
+          client = sibling;
+        }
       }
       if (!client) {
         return reply.code(400).send({ error: `No OAuth client available for ${account.provider}. Add one in OAuth Clients first.` });

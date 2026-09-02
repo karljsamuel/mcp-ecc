@@ -96,7 +96,7 @@ Agents can read [`SKILL.md`](https://github.com/karljsamuel/mcp-ecc/blob/main/SK
 
 > **CalDAV/CardDAV compatibility:** the providers implement standard WebDAV (CalDAV RFC 4791, CardDAV RFC 6352) with Basic auth and should work with any standards-compliant server. **Tested against Radicale 3.7.8.** Not tested against other servers; OAuth-only providers (e.g. iCloud without an app-specific password) are not supported.
 
-Deployment notes: Google/Microsoft/Zoho run everywhere; IMAP/SMTP, CalDAV and CardDAV require a Node.js runtime (CLI or Docker), not Cloudflare Workers.
+Deployment notes: Google/Microsoft/Zoho/IMAP/SMTP/CalDAV/CardDAV run under Node.js (CLI or Docker). Cloudflare D1 can be used as a hosted alternative for the local SQLite database.
 
 ---
 
@@ -125,7 +125,7 @@ Full reference with input schemas: [`docs/mcp-tools.md`](https://github.com/karl
 - **[CLI reference](https://github.com/karljsamuel/mcp-ecc/blob/main/docs/cli.md)** — every `mcp-ecc` command and workflow
 - **[Auth & users](https://github.com/karljsamuel/mcp-ecc/blob/main/docs/auth-users.md)** — multi-user model, bootstrap, per-user API keys
 - **[Accounts & identity](https://github.com/karljsamuel/mcp-ecc/blob/main/docs/accounts-identity.md)** — name vs slug
-- **Deployment** — [CLI](https://github.com/karljsamuel/mcp-ecc/blob/main/docs/deployment-cli.md) · [Docker](https://github.com/karljsamuel/mcp-ecc/blob/main/docs/deployment-docker.md) · [Cloudflare Workers](https://github.com/karljsamuel/mcp-ecc/blob/main/docs/deployment-cloudflare-workers.md)
+- **Deployment** — [CLI](https://github.com/karljsamuel/mcp-ecc/blob/main/docs/deployment-cli.md) · [Docker](https://github.com/karljsamuel/mcp-ecc/blob/main/docs/deployment-docker.md)
 - **Providers** — [Google](https://github.com/karljsamuel/mcp-ecc/blob/main/docs/providers-google.md) · [Microsoft 365](https://github.com/karljsamuel/mcp-ecc/blob/main/docs/providers-microsoft.md) · [Zoho](https://github.com/karljsamuel/mcp-ecc/blob/main/docs/providers-zoho.md) · [IMAP/SMTP](https://github.com/karljsamuel/mcp-ecc/blob/main/docs/providers-imap-smtp.md) · [CalDAV/CardDAV](https://github.com/karljsamuel/mcp-ecc/blob/main/docs/providers-caldav-carddav.md)
 
 ---

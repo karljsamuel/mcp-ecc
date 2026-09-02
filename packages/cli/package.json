@@ -3,6 +3,7 @@
   "version": "0.4.0-beta.1",
   "mcpName": "io.github.karljsamuel/mcp-ecc",
   "description": "MCP server for Email, Calendar & Contacts — Google, Microsoft 365, Zoho, IMAP/SMTP, CalDAV, CardDAV",
+  "type": "module",
   "main": "dist/bin.js",
   "types": "dist/bin.d.ts",
   "bin": {
@@ -29,6 +30,7 @@
     "@mcp-ecc/core": "file:../core",
     "@mcp-ecc/storage-memory": "file:../storage-memory",
     "@mcp-ecc/storage-sqlite": "file:../storage/sqlite",
+    "@mcp-ecc/storage-d1": "file:../storage/d1",
     "@mcp-ecc/mcp-server": "file:../mcp-server",
     "commander": "^15.0.0",
     "chalk": "^6.0.0",

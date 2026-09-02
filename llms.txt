@@ -16,8 +16,7 @@
 - [Authentication & Users (multi-user, bootstrap, per-user MCP API key)](https://github.com/karljsamuel/mcp-ecc/blob/main/docs/auth-users.md)
 - [Accounts & Identity (name vs slug)](https://github.com/karljsamuel/mcp-ecc/blob/main/docs/accounts-identity.md)
 - [Deployment — Local CLI](https://github.com/karljsamuel/mcp-ecc/blob/main/docs/deployment-cli.md)
-- [Deployment — Docker (single container)](https://github.com/karljsamuel/mcp-ecc/blob/main/docs/deployment-docker.md)
-- [Deployment — Cloudflare Workers](https://github.com/karljsamuel/mcp-ecc/blob/main/docs/deployment-cloudflare-workers.md)
+- [Deployment — Docker](https://github.com/karljsamuel/mcp-ecc/blob/main/docs/deployment-docker.md)
 
 ### Providers
 

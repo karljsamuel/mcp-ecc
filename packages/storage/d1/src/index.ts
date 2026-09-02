@@ -39,6 +39,137 @@ export interface D1Result<T = unknown> {
   };
 }
 
+export class CloudflareD1Database implements D1Database {
+  private accountId: string;
+  private databaseId: string;
+  private apiToken: string;
+
+  constructor(accountId: string, databaseId: string, apiToken: string) {
+    this.accountId = accountId;
+    this.databaseId = databaseId;
+    this.apiToken = apiToken;
+  }
+
+  prepare(query: string): D1PreparedStatement {
+    return new CloudflareD1PreparedStatement(this, query);
+  }
+
+  async exec(query: string): Promise<void> {
+    await this.runQuery(query, []);
+  }
+
+  async batch(statements: D1PreparedStatement[]): Promise<D1Result[]> {
+    const payloads = statements.map(stmt => ({
+      sql: (stmt as CloudflareD1PreparedStatement).getQuery(),
+      params: (stmt as CloudflareD1PreparedStatement).getParams(),
+    }));
+    return this.runBatch(payloads);
+  }
+
+  async runQuery(sql: string, params: unknown[]): Promise<D1Result> {
+    const url = `https://api.cloudflare.com/client/v4/accounts/${this.accountId}/d1/database/${this.databaseId}/query`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${this.apiToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ sql, params }),
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`Cloudflare D1 Query Error (${response.status}): ${errText}`);
+    }
+
+    const data: any = await response.json();
+    if (!data.success) {
+      throw new Error(`Cloudflare D1 Query Failed: ${JSON.stringify(data.errors)}`);
+    }
+
+    const res = data.result[0];
+    return {
+      results: res.results || [],
+      success: res.success,
+      meta: res.meta || { changes: 0, duration: 0, last_row_id: 0, changed_db: false },
+    };
+  }
+
+  async runBatch(payloads: { sql: string; params: unknown[] }[]): Promise<D1Result[]> {
+    const url = `https://api.cloudflare.com/client/v4/accounts/${this.accountId}/d1/database/${this.databaseId}/query`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${this.apiToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payloads),
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`Cloudflare D1 Batch Error (${response.status}): ${errText}`);
+    }
+
+    const data: any = await response.json();
+    if (!data.success) {
+      throw new Error(`Cloudflare D1 Batch Failed: ${JSON.stringify(data.errors)}`);
+    }
+
+    return data.result.map((res: any) => ({
+      results: res.results || [],
+      success: res.success,
+      meta: res.meta || { changes: 0, duration: 0, last_row_id: 0, changed_db: false },
+    }));
+  }
+}
+
+class CloudflareD1PreparedStatement implements D1PreparedStatement {
+  private db: CloudflareD1Database;
+  private sql: string;
+  private params: unknown[] = [];
+
+  constructor(db: CloudflareD1Database, sql: string) {
+    this.db = db;
+    this.sql = sql;
+  }
+
+  getQuery(): string {
+    return this.sql;
+  }
+
+  getParams(): unknown[] {
+    return this.params;
+  }
+
+  bind(...values: unknown[]): D1PreparedStatement {
+    const stmt = new CloudflareD1PreparedStatement(this.db, this.sql);
+    stmt.params = values;
+    return stmt;
+  }
+
+  async first<T = unknown>(colName?: string): Promise<T | null> {
+    const res = await this.db.runQuery(this.sql, this.params);
+    if (!res.results || res.results.length === 0) {
+      return null;
+    }
+    const row = res.results[0] as any;
+    if (colName) {
+      return row[colName] ?? null;
+    }
+    return row as T;
+  }
+
+  async all<T = unknown>(): Promise<D1Result<T>> {
+    const res = await this.db.runQuery(this.sql, this.params);
+    return res as D1Result<T>;
+  }
+
+  async run(): Promise<D1Result> {
+    return this.db.runQuery(this.sql, this.params);
+  }
+}
+
 export class D1Storage implements StorageAdapter {
   private db: D1Database;
   private encryptionKey: Promise<CryptoKey> | CryptoKey;

@@ -85,11 +85,70 @@ If `mcp-ecc` is not on the agent host's PATH, use the full path (from `which mcp
 
 The server speaks the Model Context Protocol over stdio: it reads JSON-RPC requests on stdin and writes responses on stdout. When the host launches `mcp-ecc start`, it can then call the `mail.*`, `calendar.*`, `contacts.*` and `accounts.*` tools.
 
-## Storage note
+## Global Directory & Storage Path
+When installed globally (`npm install -g mcp-ecc`) and run, the CLI automatically saves configurations, encryption keys, and the database in the standard user config path for your operating system:
+* **Linux:** `~/.config/mcp-ecc/` (respects `$XDG_CONFIG_HOME`)
+* **macOS:** `~/Library/Application Support/mcp-ecc/`
+* **Windows:** `%APPDATA%\mcp-ecc\`
 
-The CLI uses **SQLite storage** by default. The database is created at `data/mcp-ecc.db` (relative to the working directory; override with `MCP_STORAGE_FILE`) on first run, and all accounts, OAuth clients and users persist across restarts. Credentials (tokens, app passwords) are stored encrypted inside the database using `MCP_ENCRYPTION_KEY`.
+Inside this directory, it creates `config.json` and `data/mcp-ecc.db` so everything survives upgrades and packages update.
 
-## Adding accounts
+## 5. Storage Options: Local SQLite vs Cloudflare D1
+By default, `mcp-ecc` uses a local SQLite file. However, you can configure it to use Cloudflare D1 as a centralized, hosted database instead.
+
+### Local SQLite Config (Default)
+To configure local SQLite, specify the database file path:
+```dotenv
+MCP_DB_PROVIDER=sqlite
+MCP_STORAGE_FILE=/absolute/path/to/mcp-ecc.db
+```
+
+### Centralized Cloudflare D1 Config
+To run central D1 database backend, configure your `.env` as:
+```dotenv
+MCP_DB_PROVIDER=d1
+CLOUDFLARE_ACCOUNT_ID=your-cloudflare-account-id
+CLOUDFLARE_DATABASE_ID=your-cloudflare-d1-database-id
+CLOUDFLARE_API_TOKEN=your-cloudflare-api-token
+```
+
+#### Step 1: Create a Cloudflare D1 Database
+You can create a D1 database via the Cloudflare Dashboard or using the wrangler CLI:
+
+##### Option A: Cloudflare Dashboard
+1. Go to the **Cloudflare Dashboard** and select your account.
+2. Navigate to **Workers & Pages** > **D1**.
+3. Click **Create Database** > **Create with Dashboard**.
+4. Enter a name (e.g., `mcp-ecc-db`) and click **Create**.
+5. Copy the **Database ID** and your **Account ID** from the page.
+
+##### Option B: Wrangler CLI
+If you have wrangler installed globally:
+```bash
+# Log in to Cloudflare
+npx wrangler login
+
+# Create the database
+npx wrangler d1 create mcp-ecc-db
+```
+Wrangler will output:
+```text
+✅ Successfully created database 'mcp-ecc-db'
+- database_id = 'xxxx-xxxx-xxxx-xxxx'
+```
+
+#### Step 2: Create a Cloudflare API Token
+1. Go to **My Profile** > **API Tokens** > **Create Token**.
+2. Select **Create Custom Token**.
+3. Set the following permissions:
+   * **Account** > **D1** > **Edit**
+4. Click **Continue to summary** and click **Create Token**.
+5. Copy your API Token.
+
+#### Step 3: Run database migrations on D1
+To set up database tables, `mcp-ecc` automatically initializes them upon first boot. You do not need manual schemas!
+
+## 6. Adding accounts
 
 `mcp-ecc add account` runs an interactive wizard:
 

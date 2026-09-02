@@ -1,8 +1,0 @@
-name = "mcp-ecc"
-main = "packages/workers-entry/dist/index.js"
-compatibility_date = "2025-06-01"
-compatibility_flags = ["nodejs_compat"]
-
-[assets]
-directory = "packages/admin-ui/dist"
-binding = "ASSETS"

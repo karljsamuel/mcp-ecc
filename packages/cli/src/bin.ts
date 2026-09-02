@@ -8,21 +8,43 @@ import { randomUUID } from 'crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from 'fs';
 import { execFile } from 'child_process';
 import * as path from 'path';
-import { SQLiteStorage } from '@mcp-ecc/storage-sqlite';
 import { AuthService, OAuthManager, OAuthClient, ProviderName } from '@mcp-ecc/core';
 import { McpEccServer } from '@mcp-ecc/mcp-server';
 
-const STORAGE_FILE = process.env.MCP_STORAGE_FILE || path.join(process.cwd(), 'data', 'mcp-ecc.db');
 const ENCRYPTION_KEY = process.env.MCP_ENCRYPTION_KEY || 'default-secret-key';
+const DB_PROVIDER = process.env.MCP_DB_PROVIDER || process.env.DB_PROVIDER || 'sqlite';
 
-// Ensure parent directory exists for SQLite
-const dbDir = path.dirname(STORAGE_FILE);
-if (!existsSync(dbDir)) {
-  mkdirSync(dbDir, { recursive: true });
-  console.error(chalk.cyan(`[mcp-ecc] Created database directory at ${dbDir}`));
+let storage: any;
+let storageName = 'sqlite';
+let dbDir = process.cwd();
+
+if (DB_PROVIDER === 'd1') {
+  const { D1Storage, CloudflareD1Database } = await import('@mcp-ecc/storage-d1');
+  const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
+  const databaseId = process.env.CLOUDFLARE_DATABASE_ID;
+  const apiToken = process.env.CLOUDFLARE_API_TOKEN;
+  if (!accountId || !databaseId || !apiToken) {
+    console.error(chalk.red('Error: D1 storage selected but CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_DATABASE_ID, or CLOUDFLARE_API_TOKEN is missing.'));
+    process.exit(1);
+  }
+  const db = new CloudflareD1Database(accountId, databaseId, apiToken);
+  storage = new D1Storage(db, ENCRYPTION_KEY);
+  storageName = 'cloudflare-d1';
+  dbDir = path.join(process.cwd(), 'data'); // fallback for config storage
+  if (!existsSync(dbDir)) {
+    mkdirSync(dbDir, { recursive: true });
+  }
+} else {
+  const STORAGE_FILE = process.env.MCP_STORAGE_FILE || path.join(process.cwd(), 'data', 'mcp-ecc.db');
+  dbDir = path.dirname(STORAGE_FILE);
+  if (!existsSync(dbDir)) {
+    mkdirSync(dbDir, { recursive: true });
+    console.error(chalk.cyan(`[mcp-ecc] Created database directory at ${dbDir}`));
+  }
+  const { SQLiteStorage } = await import('@mcp-ecc/storage-sqlite');
+  storage = new SQLiteStorage(STORAGE_FILE, ENCRYPTION_KEY);
 }
 
-const storage = new SQLiteStorage(STORAGE_FILE, ENCRYPTION_KEY);
 const authService = new AuthService(storage);
 const oauthManager = new OAuthManager(storage);
 
@@ -231,7 +253,7 @@ async function handleListAccounts(): Promise<void> {
   if (accounts.length === 0) {
     console.log('No accounts configured yet. Run: mcp-ecc add account');
   } else {
-    accounts.forEach((acc, i) => {
+    accounts.forEach((acc: any, i: number) => {
       console.log(`  ${i + 1}. [${acc.provider}] ${chalk.bold(acc.name)} (${acc.email}) - Status: ${acc.status}`);
     });
   }
@@ -361,12 +383,12 @@ async function handleAddAccount(): Promise<void> {
     if (sel.needsOAuth) {
       // Load existing OAuth clients
       const clients = await storage.listOAuthClients(currentUser.id);
-      const filtered = clients.filter(c => c.provider === sel.provider);
+      const filtered = clients.filter((c: any) => c.provider === sel.provider);
       let selectedClientId = '';
 
       if (filtered.length > 0) {
         console.log('\nSelect OAuth Client:');
-        filtered.forEach((c, idx) => {
+        filtered.forEach((c: any, idx: number) => {
           console.log(`  ${idx + 1}. ${c.label} (${c.clientId})`);
         });
         console.log(`  ${filtered.length + 1}. Create a new client`);
@@ -436,7 +458,16 @@ async function handleAddAccount(): Promise<void> {
         await storage.saveOAuthClient(savedClient);
         client = savedClient;
       } else {
-        client = filtered.find(c => c.id === selectedClientId);
+        const chosenClient = filtered.find((c: any) => c.id === selectedClientId);
+        if (chosenClient) {
+          const preferredPlatform = sel.provider === 'zoho' ? 'limited_input' : 'desktop';
+          const sibling = filtered.find((c: any) =>
+            c.label === chosenClient.label &&
+            c.clientPlatform === preferredPlatform &&
+            c.enabled
+          );
+          client = sibling || chosenClient;
+        }
       }
 
       if (!client) throw new Error('Failed to resolve OAuth client');
@@ -524,7 +555,7 @@ async function handleRemoveAccount(): Promise<void> {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   try {
     console.log(chalk.bold.cyan('\n=== Remove Account ==='));
-    accounts.forEach((acc, i) => {
+    accounts.forEach((acc: any, i: number) => {
       console.log(`  ${i + 1}. [${acc.provider}] ${acc.name} (${acc.email})`);
     });
     const choiceIdx = parseInt(await askQuestion(rl, `\nSelect account to remove (1-${accounts.length}): `) || '', 10);
@@ -638,7 +669,7 @@ async function handleEditAccount(): Promise<void> {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   try {
     console.log(chalk.bold.cyan('\n=== Edit Account ==='));
-    accounts.forEach((acc, i) => {
+    accounts.forEach((acc: any, i: number) => {
       console.log(`  ${i + 1}. [${acc.provider}] ${acc.name} (${acc.email})`);
     });
     const choiceIdx = parseInt(await askQuestion(rl, `\nSelect account to edit (1-${accounts.length}): `) || '', 10);
@@ -711,7 +742,7 @@ async function handleReauthenticate(slug?: string): Promise<void> {
   try {
     let target: any;
     if (slug) {
-      target = accounts.find(a => a.slug === slug);
+      target = accounts.find((a: any) => a.slug === slug);
       if (!target) {
         console.error(chalk.red(`Error: Account with slug '${slug}' not found.`));
         return;
@@ -722,7 +753,7 @@ async function handleReauthenticate(slug?: string): Promise<void> {
         return;
       }
       console.log(chalk.bold.cyan('\n=== Reauthenticate Account ==='));
-      accounts.forEach((acc, i) => {
+      accounts.forEach((acc: any, i: number) => {
         console.log(`  ${i + 1}. [${acc.provider}] ${acc.name} (${acc.email}) - Status: ${acc.status}`);
       });
       const choiceIdx = parseInt(await askQuestion(rl, `\nSelect account to reauthenticate (1-${accounts.length}): `) || '', 10);
@@ -741,9 +772,21 @@ async function handleReauthenticate(slug?: string): Promise<void> {
 
     // Resolve the stored OAuth client for this account
     const clientId = target.credentials?.oauthClientId;
-    const client = clientId
-      ? await storage.getOAuthClient(clientId)
-      : null;
+    let client: any = null;
+    if (clientId) {
+      const originalClient = await storage.getOAuthClient(clientId);
+      if (originalClient) {
+        const preferredPlatform = target.provider === 'zoho' ? 'limited_input' : 'desktop';
+        const clients = await storage.listOAuthClients(currentUser.id);
+        const sibling = clients.find((c: any) =>
+          c.provider === target.provider &&
+          c.label === originalClient.label &&
+          c.clientPlatform === preferredPlatform &&
+          c.enabled
+        );
+        client = sibling || originalClient;
+      }
+    }
 
     if (!client) {
       console.error(chalk.red('Error: No saved OAuth client found for this account. Re-run: mcp-ecc add account'));
@@ -762,6 +805,222 @@ async function handleReauthenticate(slug?: string): Promise<void> {
     });
     await storage.updateAccount(target.id, { status: 'active', health: 'unknown' });
     console.log(chalk.green(`\n✔ Account '${target.name}' successfully reauthenticated.\n`));
+  } catch (err: any) {
+    console.error(chalk.red(`\nError: ${err.message}\n`));
+  } finally {
+    rl.close();
+  }
+}
+
+async function handleAddOAuthClient(): Promise<void> {
+  const currentUser = await ensureAuthenticated();
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    console.log(chalk.bold.cyan('\n=== Add OAuth Client ==='));
+    
+    console.log('\nSelect Provider:');
+    console.log('1. Google');
+    console.log('2. Microsoft');
+    console.log('3. Zoho');
+    const providerChoice = await askQuestion(rl, 'Choose option (1-3): ');
+    
+    const providers: Record<string, ProviderName> = {
+      '1': 'google',
+      '2': 'microsoft',
+      '3': 'zoho',
+    };
+    const provider = providers[providerChoice];
+    if (!provider) throw new Error('Invalid provider selected');
+
+    const label = await askQuestion(rl, 'Client Label (e.g. My Org Client): ');
+    if (!label.trim()) throw new Error('Label is required');
+
+    const clientId = await askQuestion(rl, 'Client ID: ');
+    if (!clientId.trim()) throw new Error('Client ID is required');
+
+    const clientSecret = await askQuestion(rl, 'Client Secret: ');
+
+    console.log('\nSelect Client Platform:');
+    console.log('1. Desktop / Installed App (desktop)');
+    console.log('2. Web Application (web)');
+    console.log('3. Device Flow / Limited Input (limited_input)');
+    const platformChoice = await askQuestion(rl, 'Choose option (1-3) [1]: ') || '1';
+    
+    const platforms: Record<string, 'desktop' | 'web' | 'limited_input'> = {
+      '1': 'desktop',
+      '2': 'web',
+      '3': 'limited_input',
+    };
+    const clientPlatform = platforms[platformChoice] || 'desktop';
+
+    // Map platform to standard oauth client type
+    const clientType = clientPlatform === 'desktop' || clientPlatform === 'limited_input' ? 'public' : 'confidential';
+
+    let tenantId = 'common';
+    let accountsServer = 'accounts.zoho.com';
+
+    if (provider === 'microsoft') {
+      const isOrg = await askQuestion(rl, 'Is this an M365 Organization/Office account? (y/N): ');
+      if (isOrg.trim().toLowerCase() === 'y') {
+        const customTenant = await askQuestion(rl, 'Enter Microsoft Tenant ID/Directory ID [organizations]: ');
+        tenantId = customTenant.trim() || 'organizations';
+      }
+    } else if (provider === 'zoho') {
+      const region = await askQuestion(rl, 'Zoho region (us/eu/in/cn/jp/au) [us]: ');
+      const regions: Record<string, string> = {
+        'us': 'accounts.zoho.com',
+        'eu': 'accounts.zoho.eu',
+        'in': 'accounts.zoho.in',
+        'cn': 'accounts.zoho.com.cn',
+        'jp': 'accounts.zoho.jp',
+        'au': 'accounts.zoho.com.au',
+      };
+      accountsServer = regions[region.trim().toLowerCase()] || 'accounts.zoho.com';
+    }
+
+    let scopes: string[] = [];
+    if (provider === 'google') {
+      scopes = [
+        'https://www.googleapis.com/auth/gmail.modify',
+        'https://www.googleapis.com/auth/calendar',
+        'https://www.googleapis.com/auth/contacts',
+        'https://www.googleapis.com/auth/userinfo.email',
+        'https://www.googleapis.com/auth/userinfo.profile',
+      ];
+    } else if (provider === 'microsoft') {
+      scopes = ['offline_access', 'https://graph.microsoft.com/Mail.ReadWrite', 'https://graph.microsoft.com/Calendars.ReadWrite', 'https://graph.microsoft.com/Contacts.ReadWrite'];
+    } else if (provider === 'zoho') {
+      scopes = ['ZohoMail.folders.READ', 'ZohoMail.messages.ALL', 'ZohoCalendar.calendar.ALL', 'zohocontacts.contactapi.ALL', 'zohocontacts.contactapi.READ'];
+    }
+
+    const client: OAuthClient = {
+      id: randomUUID(),
+      ownerId: currentUser.id,
+      provider,
+      label: label.trim(),
+      clientId: clientId.trim(),
+      clientSecret: clientSecret.trim(),
+      scopes,
+      tenantId,
+      accountsServer,
+      clientType,
+      clientPlatform,
+      enabled: true,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+
+    await storage.saveOAuthClient(client);
+    console.log(chalk.green(`\n✔ OAuth Client '${client.label}' (${clientPlatform}) added successfully.\n`));
+  } catch (err: any) {
+    console.error(chalk.red(`\nError: ${err.message}\n`));
+  } finally {
+    rl.close();
+  }
+}
+
+async function handleListOAuthClients(): Promise<void> {
+  const currentUser = await ensureAuthenticated();
+  try {
+    const clients = await storage.listOAuthClients(currentUser.id);
+    console.log(chalk.bold.cyan('\n=== Stored OAuth Clients ==='));
+    if (clients.length === 0) {
+      console.log(chalk.yellow('No OAuth Clients added yet.\n'));
+      return;
+    }
+    clients.forEach((c: any, i: number) => {
+      console.log(`  ${i + 1}. [${c.provider}] ${chalk.bold(c.label)}`);
+      console.log(`     Client ID: ${c.clientId}`);
+      console.log(`     Platform:  ${c.clientPlatform || 'desktop'} (${c.clientType || 'public'})`);
+      if (c.tenantId) console.log(`     Tenant ID: ${c.tenantId}`);
+      if (c.accountsServer) console.log(`     Server:    ${c.accountsServer}`);
+      console.log(`     Enabled:   ${c.enabled ? chalk.green('yes') : chalk.red('no')}`);
+      console.log('');
+    });
+  } catch (err: any) {
+    console.error(chalk.red(`\nError: ${err.message}\n`));
+  }
+}
+
+async function handleEditOAuthClient(): Promise<void> {
+  const currentUser = await ensureAuthenticated();
+  const clients = await storage.listOAuthClients(currentUser.id);
+  if (clients.length === 0) {
+    console.log(chalk.yellow('\nNo OAuth Clients added yet.\n'));
+    return;
+  }
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    console.log(chalk.bold.cyan('\n=== Edit OAuth Client ==='));
+    clients.forEach((c: any, i: number) => {
+      console.log(`  ${i + 1}. [${c.provider}] ${c.label} (${c.clientId})`);
+    });
+    const choiceIdx = parseInt(await askQuestion(rl, `\nSelect OAuth client to edit (1-${clients.length}): `) || '', 10);
+    if (choiceIdx <= 0 || choiceIdx > clients.length) {
+      console.log(chalk.red('\nInvalid selection.\n'));
+      return;
+    }
+    const selected = clients[choiceIdx - 1];
+
+    const updates: any = {};
+    const newLabel = await askQuestion(rl, `Label [${selected.label}]: `);
+    if (newLabel.trim()) updates.label = newLabel.trim();
+    
+    const newClientId = await askQuestion(rl, `Client ID [${selected.clientId}]: `);
+    if (newClientId.trim()) updates.clientId = newClientId.trim();
+
+    const newClientSecret = await askQuestion(rl, `Client Secret [${selected.clientSecret ? '********' : 'none'}]: `);
+    if (newClientSecret.trim()) updates.clientSecret = newClientSecret.trim();
+
+    console.log('\nSelect Client Platform:');
+    console.log(`1. Desktop / Installed App (desktop)`);
+    console.log(`2. Web Application (web)`);
+    console.log(`3. Device Flow / Limited Input (limited_input)`);
+    const platformChoice = await askQuestion(rl, `Current [${selected.clientPlatform || 'desktop'}], choose (1-3) or leave blank: `);
+    if (platformChoice.trim()) {
+      const platforms: Record<string, 'desktop' | 'web' | 'limited_input'> = { '1': 'desktop', '2': 'web', '3': 'limited_input' };
+      if (platforms[platformChoice]) {
+        updates.clientPlatform = platforms[platformChoice];
+        updates.clientType = updates.clientPlatform === 'web' ? 'confidential' : 'public';
+      }
+    }
+
+    if (Object.keys(updates).length > 0) {
+      updates.updatedAt = Date.now();
+      const merged = { ...selected, ...updates };
+      await storage.saveOAuthClient(merged);
+      console.log(chalk.green('\n✔ OAuth Client details updated successfully.\n'));
+    } else {
+      console.log(chalk.yellow('\nNo changes made.\n'));
+    }
+  } catch (err: any) {
+    console.error(chalk.red(`\nError: ${err.message}\n`));
+  } finally {
+    rl.close();
+  }
+}
+
+async function handleRemoveOAuthClient(): Promise<void> {
+  const currentUser = await ensureAuthenticated();
+  const clients = await storage.listOAuthClients(currentUser.id);
+  if (clients.length === 0) {
+    console.log(chalk.yellow('\nNo OAuth Clients added yet.\n'));
+    return;
+  }
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    console.log(chalk.bold.cyan('\n=== Remove OAuth Client ==='));
+    clients.forEach((c: any, i: number) => {
+      console.log(`  ${i + 1}. [${c.provider}] ${c.label} (${c.clientId})`);
+    });
+    const choiceIdx = parseInt(await askQuestion(rl, `\nSelect OAuth client to remove (1-${clients.length}): `) || '', 10);
+    if (choiceIdx > 0 && choiceIdx <= clients.length) {
+      const selected = clients[choiceIdx - 1];
+      await storage.deleteOAuthClient(selected.id);
+      console.log(chalk.green(`\n✔ OAuth Client '${selected.label}' has been successfully deleted.\n`));
+    } else {
+      console.log(chalk.red('\nInvalid selection.\n'));
+    }
   } catch (err: any) {
     console.error(chalk.red(`\nError: ${err.message}\n`));
   } finally {
@@ -899,18 +1158,22 @@ program
 const addCmd = program.command('add').description('Add resources');
 addCmd.command('account').description('Add a new provider account (Gmail, Office365, IMAP)').action(handleAddAccount);
 addCmd.command('user').description('Add a new user account (Admin only)').action(handleAddUser);
+addCmd.command('oauth-client').description('Add a new OAuth client credentials config').action(handleAddOAuthClient);
 
 const removeCmd = program.command('remove').description('Remove resources');
 removeCmd.command('account').description('Remove a configured account').action(handleRemoveAccount);
+removeCmd.command('oauth-client').description('Remove a configured OAuth client').action(handleRemoveOAuthClient);
 
 const editCmd = program.command('edit').description('Edit resources');
 editCmd.command('account').description('Edit a configured account (name, slug, email, status)').action(handleEditAccount);
+editCmd.command('oauth-client').description('Edit a configured OAuth client config').action(handleEditOAuthClient);
 
 const reauthCmd = program.command('reauthenticate').description('Re-authenticate an OAuth account after failure/expiry');
 reauthCmd.argument('[slug]', 'Account slug to reauthenticate (selects interactively if omitted)').action((slug?: string) => handleReauthenticate(slug));
 
 const listCmd = program.command('list').description('List resources');
 listCmd.command('accounts').description('List configured accounts').action(handleListAccounts);
+listCmd.command('oauth-clients').description('List configured OAuth clients').action(handleListOAuthClients);
 
 program
   .command('start')

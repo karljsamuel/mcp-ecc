@@ -14,24 +14,40 @@ const PUBLIC_URL = process.env.PUBLIC_URL || process.env.BASE_URL || `http://loc
 const SESSION_SECRET = process.env.SESSION_SECRET;
 const ENCRYPTION_KEY = process.env.MCP_ENCRYPTION_KEY;
 
-// Storage: SQLite or Memory fallback.
+// Storage: SQLite, D1 or Memory fallback.
 let storage;
 let storageName = 'sqlite';
+const DB_PROVIDER = process.env.MCP_DB_PROVIDER || process.env.DB_PROVIDER || 'sqlite';
+
 try {
-  const { SQLiteStorage } = await import('@mcp-ecc/storage-sqlite');
-  const STORAGE_FILE = process.env.MCP_STORAGE_FILE || join(process.cwd(), 'data', 'mcp-ecc.db');
-  const dbDir = dirname(STORAGE_FILE);
-  if (!existsSync(dbDir)) {
-    mkdirSync(dbDir, { recursive: true });
-    console.log(`[mcp-ecc] Created database directory at ${dbDir}`);
+  if (DB_PROVIDER === 'd1') {
+    const { D1Storage, CloudflareD1Database } = await import('@mcp-ecc/storage-d1');
+    const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
+    const databaseId = process.env.CLOUDFLARE_DATABASE_ID;
+    const apiToken = process.env.CLOUDFLARE_API_TOKEN;
+    if (!accountId || !databaseId || !apiToken) {
+      throw new Error('D1 storage selected but CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_DATABASE_ID, or CLOUDFLARE_API_TOKEN is missing.');
+    }
+    const db = new CloudflareD1Database(accountId, databaseId, apiToken);
+    storage = new D1Storage(db, ENCRYPTION_KEY);
+    storageName = 'cloudflare-d1';
+    console.log(`[mcp-ecc] Cloudflare D1 storage initialized (DB: ${databaseId})`);
+  } else {
+    const { SQLiteStorage } = await import('@mcp-ecc/storage-sqlite');
+    const STORAGE_FILE = process.env.MCP_STORAGE_FILE || join(process.cwd(), 'data', 'mcp-ecc.db');
+    const dbDir = dirname(STORAGE_FILE);
+    if (!existsSync(dbDir)) {
+      mkdirSync(dbDir, { recursive: true });
+      console.log(`[mcp-ecc] Created database directory at ${dbDir}`);
+    }
+    storage = new SQLiteStorage(STORAGE_FILE, ENCRYPTION_KEY);
+    console.log(`[mcp-ecc] SQLite storage initialized at ${STORAGE_FILE}`);
   }
-  storage = new SQLiteStorage(STORAGE_FILE, ENCRYPTION_KEY);
-  console.log(`[mcp-ecc] SQLite storage initialized at ${STORAGE_FILE}`);
 } catch (e: any) {
   const { MemoryStorage } = await import('@mcp-ecc/storage-memory');
   storage = new MemoryStorage();
   storageName = 'memory';
-  console.warn(`SQLite storage unavailable (native module missing), falling back to in-memory: ${e.message}`);
+  console.warn(`Storage provider initialization failed, falling back to in-memory: ${e.message}`);
 }
 
 // Bootstrap guidance: if no users exist, the web UI shows the create-admin screen.

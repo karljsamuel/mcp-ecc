@@ -16,8 +16,7 @@
     "clean": "turbo run clean",
     "format": "prettier --write \"packages/**/*.{ts,json,md}\"",
     "cli": "node packages/cli/dist/bin.js",
-    "api": "node packages/management-api/dist/index.js",
-    "workers:deploy": "cd packages/workers-entry && wrangler deploy"
+    "api": "node packages/management-api/dist/index.js"
   },
   "devDependencies": {
     "turbo": "^2.10.0",
