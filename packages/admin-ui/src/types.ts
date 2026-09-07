@@ -2,6 +2,7 @@ export type ProviderName = 'google' | 'microsoft' | 'zoho' | 'imap' | 'smtp' | '
 export type AccountStatus = 'active' | 'error' | 'disabled';
 export type Health = 'unknown' | 'healthy' | 'unhealthy';
 export type Role = 'admin' | 'user';
+export type ClientPlatform = 'desktop' | 'web' | 'limited_input';
 
 export interface User {
   id: string;
@@ -35,6 +36,21 @@ export interface OAuthClient {
   scopes: string[];
   tenantId?: string;
   accountsServer?: string;
+  clientPlatform?: ClientPlatform;
+  clientType?: 'public' | 'confidential';
+  enabled?: boolean;
+}
+
+export interface OAuthClientInput {
+  provider: ProviderName;
+  label: string;
+  clientId: string;
+  clientSecret: string;
+  scopes: string[];
+  tenantId?: string;
+  accountsServer?: string;
+  clientPlatform?: ClientPlatform;
+  clientType?: 'public' | 'confidential';
 }
 
 export interface AccountCreateInput {
@@ -44,7 +60,6 @@ export interface AccountCreateInput {
   email: string;
   config?: Record<string, unknown>;
   oauthClientId?: string;
-  // Inline OAuth client creation (used when no saved client matches)
   client?: {
     label?: string;
     clientId?: string;
@@ -52,6 +67,8 @@ export interface AccountCreateInput {
     scopes?: string[];
     tenantId?: string;
     accountsServer?: string;
+    clientPlatform?: ClientPlatform;
+    clientType?: 'public' | 'confidential';
   };
 }
 

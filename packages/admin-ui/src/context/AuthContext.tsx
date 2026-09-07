@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from 'react';
@@ -29,6 +30,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [needsBootstrap, setNeedsBootstrap] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
+  const initialCheckDone = useRef(false);
 
   const redirectToLogin = useCallback(() => {
     setUser(null);
@@ -37,7 +39,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [navigate, location.pathname]);
 
+  // Only set the unauthorized handler AFTER the initial auth check resolves.
+  // During initial load, refresh() handles the 401 itself.
   useEffect(() => {
+    if (!initialCheckDone.current) return;
     setUnauthorizedHandler(redirectToLogin);
     return () => setUnauthorizedHandler(null);
   }, [redirectToLogin]);
@@ -48,18 +53,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(u);
       setLoading(false);
       setNeedsBootstrap(false);
+      initialCheckDone.current = true;
       return u;
     } catch {
       // Not logged in — check whether we need to bootstrap the first admin.
       try {
         const { needsBootstrap } = await infoApi.bootstrapStatus();
         setNeedsBootstrap(!!needsBootstrap);
-        setLoading(false);
       } catch {
         setNeedsBootstrap(false);
-        setLoading(false);
       }
       setUser(null);
+      setLoading(false);
+      initialCheckDone.current = true;
       return null;
     }
   }, []);
@@ -78,7 +84,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const logout = useCallback(async () => {
-    // Clear local state first so the UI immediately reflects signed-out.
     setUser(null);
     setNeedsBootstrap(false);
     try {

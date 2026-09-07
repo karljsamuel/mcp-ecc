@@ -34,7 +34,7 @@ function publicUser(u: User, includeApiKey = false) {
   return base;
 }
 function publicClient(c: OAuthClient) {
-  return { id: c.id, provider: c.provider, label: c.label, clientId: c.clientId, scopes: c.scopes, tenantId: c.tenantId, accountsServer: c.accountsServer, enabled: c.enabled };
+  return { id: c.id, provider: c.provider, label: c.label, clientId: c.clientId, scopes: c.scopes, tenantId: c.tenantId, accountsServer: c.accountsServer, clientPlatform: c.clientPlatform, clientType: c.clientType, enabled: c.enabled };
 }
 
 export class ManagementApi {
@@ -83,6 +83,7 @@ export class ManagementApi {
       publicUrl: this.publicUrl,
       oauthRedirectUri: `${this.publicUrl}/oauth/callback`,
       mcpEndpoint: `${this.publicUrl}/mcp`,
+      storage: { provider: process.env.MCP_DB_PROVIDER || 'sqlite' },
     }));
 
     // --- Public bootstrap status (no auth): used to show the 'create admin' screen ---
@@ -320,12 +321,12 @@ export class ManagementApi {
     });
 
     this.app.post('/api/oauth-clients', async (request: any, reply: any) => {
-      const { provider, label, clientId, clientSecret, scopes, tenantId, accountsServer } = request.body;
+      const { provider, label, clientId, clientSecret, scopes, tenantId, accountsServer, clientPlatform, clientType } = request.body;
       if (!provider || !label || !clientId) return reply.code(400).send({ error: 'provider, label, clientId required' });
       if (!AUTH_PROVIDERS.includes(provider)) return reply.code(400).send({ error: `Unsupported provider: ${provider}` });
       const client: OAuthClient = {
         id: randomUUID(), ownerId: request.user.id, provider, label, clientId, clientSecret: clientSecret || '',
-        scopes: scopes || [], tenantId, accountsServer, enabled: true, createdAt: Date.now(), updatedAt: Date.now(),
+        scopes: scopes || [], tenantId, accountsServer, clientPlatform, clientType, enabled: true, createdAt: Date.now(), updatedAt: Date.now(),
       };
       await this.storage.saveOAuthClient(client);
       return reply.code(201).send({ client: publicClient(client) });
@@ -339,7 +340,26 @@ export class ManagementApi {
     });
 
     // --- Users (admin only) ---
-    this.app.get('/api/users', async (request: any, reply: any) => {
+    
+    this.app.patch('/api/oauth-clients/:id', async (request: any, reply: any) => {
+      const client = await this.storage.getOAuthClient(request.params.id);
+      if (!client || client.ownerId !== request.user.id) return reply.code(404).send({ error: 'Client not found' });
+      const { label, clientId, clientSecret, scopes, tenantId, accountsServer, clientPlatform, clientType } = request.body;
+      const updates: any = { updatedAt: Date.now() };
+      if (label !== undefined) updates.label = label;
+      if (clientId !== undefined) updates.clientId = clientId;
+      if (clientSecret !== undefined) updates.clientSecret = clientSecret;
+      if (scopes !== undefined) updates.scopes = scopes;
+      if (tenantId !== undefined) updates.tenantId = tenantId;
+      if (accountsServer !== undefined) updates.accountsServer = accountsServer;
+      if (clientPlatform !== undefined) updates.clientPlatform = clientPlatform;
+      if (clientType !== undefined) updates.clientType = clientType;
+      const merged = { ...client, ...updates };
+      await this.storage.saveOAuthClient(merged);
+      return { client: publicClient(merged) };
+    });
+
+this.app.get('/api/users', async (request: any, reply: any) => {
       if (request.user.role !== 'admin') return reply.code(403).send({ error: 'Admin only' });
       const users = await this.storage.listUsers();
       return { users: users.map((u) => publicUser(u, false)) };

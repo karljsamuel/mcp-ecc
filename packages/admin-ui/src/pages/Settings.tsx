@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
-import { settingsApi } from '../api';
+import { infoApi, settingsApi } from '../api';
 import { Alert, CopyButton, Spinner } from '../components/ui';
 import type { ToastPush } from './toast';
 
@@ -11,9 +11,16 @@ type SettingsData = {
   mcpApiKey?: string;
 };
 
+type ServerInfo = {
+  publicUrl: string;
+  mcpEndpoint: string;
+  storage: { provider: string };
+};
+
 export function Settings({ push }: { push: ToastPush }) {
   const [data, setData] = useState<SettingsData | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [serverInfo, setServerInfo] = useState<ServerInfo | null>(null);
   const endpoint = typeof window !== 'undefined' ? `${window.location.origin}/mcp` : '/mcp';
 
   const [displayName, setDisplayName] = useState('');
@@ -39,6 +46,10 @@ export function Settings({ push }: { push: ToastPush }) {
     } catch (e) {
       setError((e as Error).message);
     }
+    try {
+      const info = await infoApi.fetch();
+      setServerInfo(info as any);
+    } catch { /* non-critical */ }
   }, []);
 
   useEffect(() => {
@@ -160,7 +171,29 @@ export function Settings({ push }: { push: ToastPush }) {
         </form>
       </div>
 
-      {/* Change Password Modal */}
+      {/* Server & Storage Info */}
+      <div className="card p-6">
+        <h2 className="mb-1 text-base font-semibold text-slate-900">Server</h2>
+        <p className="mb-4 text-sm text-slate-500">Connection details and storage configuration.</p>
+        <div className="space-y-3 text-sm">
+          <div className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2">
+            <span className="text-slate-500">Storage</span>
+            <span className="font-medium text-slate-900">
+              {serverInfo?.storage?.provider === 'd1' ? 'Cloudflare D1' : 'SQLite'}
+            </span>
+          </div>
+          <div className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2">
+            <span className="text-slate-500">Public URL</span>
+            <span className="font-mono text-xs text-slate-700">{serverInfo?.publicUrl ?? '—'}</span>
+          </div>
+          <div className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2">
+            <span className="text-slate-500">MCP Endpoint</span>
+            <span className="font-mono text-xs text-slate-700">{serverInfo?.mcpEndpoint ?? endpoint}</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Change Password */}
       {showPasswordModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
           <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
