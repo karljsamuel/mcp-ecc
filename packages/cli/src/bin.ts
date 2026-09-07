@@ -870,13 +870,8 @@ async function handleAddOAuthClient(): Promise<void> {
       const platforms: Record<string, 'desktop' | 'web'> = { '1': 'desktop', '2': 'web' };
       clientPlatform = platforms[platformChoice] || 'desktop';
     } else if (provider === 'microsoft') {
-      console.log('1. Desktop / Installed App (desktop)');
-      console.log('2. Web Application (web)');
-      console.log('3. Device Flow / Limited Input (limited_input)');
-      console.log('   Note: A single Azure app registration works for all platforms.');
-      const platformChoice = await askQuestion(rl, 'Choose option (1-3) [1]: ') || '1';
-      const platforms: Record<string, 'desktop' | 'web' | 'limited_input'> = { '1': 'desktop', '2': 'web', '3': 'limited_input' };
-      clientPlatform = platforms[platformChoice] || 'desktop';
+      // A single Azure app registration works for all platforms.
+      clientPlatform = 'limited_input';
     } else if (provider === 'zoho') {
       console.log('1. Desktop / Installed App (desktop)');
       console.log('2. Web Application (web)');

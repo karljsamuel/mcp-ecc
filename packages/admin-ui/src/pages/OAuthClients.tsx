@@ -208,7 +208,7 @@ export function OAuthClients({ push }: { push: ToastFn }) {
                 <label className="label">Provider</label>
                 <select
                   value={form.provider}
-                  onChange={(e) => setForm({ ...form, provider: e.target.value as ProviderName })}
+                  onChange={(e) => { const p = e.target.value as ProviderName; setForm(f => ({ ...f, provider: p, clientPlatform: p === 'microsoft' ? 'limited_input' : f.clientPlatform })); }}
                   className="input"
                   disabled={!!editing}
                 >
@@ -259,7 +259,7 @@ export function OAuthClients({ push }: { push: ToastFn }) {
                   className="input"
                 >
                   {(Object.keys(PLATFORM_LABELS) as ClientPlatform[])
-                    .filter((p) => !(form.provider === 'google' && p === 'limited_input'))
+                    .filter((p) => !(form.provider === 'google' && p === 'limited_input') && !(form.provider === 'microsoft' && p !== 'limited_input'))
                     .map((p) => (
                       <option key={p} value={p}>
                         {PLATFORM_LABELS[p]}
@@ -270,7 +270,7 @@ export function OAuthClients({ push }: { push: ToastFn }) {
                   {form.provider === 'google'
                     ? 'Google does not support Device Flow / Limited Input for mail & calendar. Use Desktop for CLI auth, Web for web UI auth.'
                     : form.provider === 'microsoft'
-                      ? 'A single Azure app registration can serve all platforms. Use limited_input for device-flow (CLI/non-browser) auth.'
+                      ? 'A single Azure app registration covers all platforms. Auto-set to limited_input.'
                       : form.provider === 'zoho'
                         ? 'Zoho can be used as a Self-Client (limited_input) or Web client. Desktop works for CLI local-redirect auth.'
                         : 'Type is auto-derived: web → confidential, desktop/limited_input → public.'}
