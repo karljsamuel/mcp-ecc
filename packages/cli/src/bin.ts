@@ -859,18 +859,33 @@ async function handleAddOAuthClient(): Promise<void> {
 
     const clientSecret = await askQuestion(rl, 'Client Secret: ');
 
+    let clientPlatform: 'desktop' | 'web' | 'limited_input' = 'desktop';
     console.log('\nSelect Client Platform:');
-    console.log('1. Desktop / Installed App (desktop)');
-    console.log('2. Web Application (web)');
-    console.log('3. Device Flow / Limited Input (limited_input)');
-    const platformChoice = await askQuestion(rl, 'Choose option (1-3) [1]: ') || '1';
-    
-    const platforms: Record<string, 'desktop' | 'web' | 'limited_input'> = {
-      '1': 'desktop',
-      '2': 'web',
-      '3': 'limited_input',
-    };
-    const clientPlatform = platforms[platformChoice] || 'desktop';
+    if (provider === 'google') {
+      console.log('1. Desktop / Installed App (desktop)');
+      console.log('2. Web Application (web)');
+      console.log('   Note: Google does NOT support Device Flow / Limited Input for mail & calendar.');
+      console.log('   Create a Desktop client for CLI auth, and a Web client for web UI auth.');
+      const platformChoice = await askQuestion(rl, 'Choose option (1-2) [1]: ') || '1';
+      const platforms: Record<string, 'desktop' | 'web'> = { '1': 'desktop', '2': 'web' };
+      clientPlatform = platforms[platformChoice] || 'desktop';
+    } else if (provider === 'microsoft') {
+      console.log('1. Desktop / Installed App (desktop)');
+      console.log('2. Web Application (web)');
+      console.log('3. Device Flow / Limited Input (limited_input)');
+      console.log('   Note: A single Azure app registration works for all platforms.');
+      const platformChoice = await askQuestion(rl, 'Choose option (1-3) [1]: ') || '1';
+      const platforms: Record<string, 'desktop' | 'web' | 'limited_input'> = { '1': 'desktop', '2': 'web', '3': 'limited_input' };
+      clientPlatform = platforms[platformChoice] || 'desktop';
+    } else if (provider === 'zoho') {
+      console.log('1. Desktop / Installed App (desktop)');
+      console.log('2. Web Application (web)');
+      console.log('3. Device Flow / Limited Input (limited_input)');
+      console.log('   Note: Zoho can be created as a Self-Client (limited_input) or Web client.');
+      const platformChoice = await askQuestion(rl, 'Choose option (1-3) [1]: ') || '1';
+      const platforms: Record<string, 'desktop' | 'web' | 'limited_input'> = { '1': 'desktop', '2': 'web', '3': 'limited_input' };
+      clientPlatform = platforms[platformChoice] || 'desktop';
+    }
 
     // Map platform to standard oauth client type
     const clientType = clientPlatform === 'desktop' || clientPlatform === 'limited_input' ? 'public' : 'confidential';

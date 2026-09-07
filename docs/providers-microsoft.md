@@ -28,10 +28,18 @@ Each user connecting a Microsoft account registers their own app in Azure:
    - **Supported account types** — choose per the account type below
 3. Note the **Application (client) ID** and the **Directory (tenant) ID**
 4. **Certificates & secrets → New client secret** → copy the value (shown once). This becomes the client secret you store in mcp-ecc.
-5. **Authentication → Add a platform → Web** and add redirect URIs:
-   - `http://localhost:3001/oauth/callback` (Docker / UI)
-   - your deployed `BASE_URL/oauth/callback`
-   - For the **device-code** flow used by the CLI, a desktop-app / native client is fine and no redirect URI is strictly required.
+5. **Authentication → Add a platform**
+
+### Platform: single app registration for all modes
+
+Unlike Google, **a single Azure app registration works for all platforms**. You do not need separate client IDs for CLI vs web:
+
+| Desired auth mode | Platform to add | Redirect URI |
+|-------------------|-----------------|-------------|
+| **CLI (device code)** | **Mobile and desktop applications** | No redirect URI required — Azure provides the device-code endpoint automatically. |
+| **Web UI / Docker** | **Web** | `http://localhost:3001/oauth/callback` and your deployed `PUBLIC_URL/oauth/callback` |
+
+Register the same client in mcp-ecc with platform `limited_input` (for CLI device-flow) and the sibling with platform `web` (for the web UI). Or register once with `limited_input` — the web UI will still work via device code displayed in the browser.
 
 ### Account type: personal Outlook, single-tenant M365, multi-tenant
 

@@ -28,12 +28,19 @@ Each user who wants to connect a Google account must have their own OAuth client
    - Choose **External** (or **Internal** if you manage the domain) — see account-type guidance below
    - Add the scopes / user type as appropriate
 5. **APIs & Services → Credentials → Create Credentials → OAuth client ID**
-   - **Application type: Desktop app** — for the device-code flow (CLI)
-   - Or **Web application** — for the authorisation-code flow (web UI / Docker)
-   - For the web application add the redirect URIs:
-     - `http://localhost:3001/oauth/callback` (Docker / local UI)
-     - your deployed `BASE_URL/oauth/callback`
-6. Note the **Client ID** and **Client Secret**
+
+### Client type: Desktop vs Web
+
+Google does **not** support the OAuth device-code (limited-input) grant for Gmail, Calendar, or Contacts scopes. You must create **two separate clients** if you want both CLI and web UI authentication:
+
+| Platform | Application type | When to use |
+|----------|-----------------|-------------|
+| **Desktop** | **Desktop app** | CLI auth — uses a local redirect server (`http://127.0.0.1:PORT/oauth/callback`). No redirect URI registration needed in Google Cloud. |
+| **Web** | **Web application** | Web UI / Docker auth — uses the redirect URI `http://localhost:3001/oauth/callback` and your deployed `PUBLIC_URL/oauth/callback`. |
+
+Register both clients under the same **label** in mcp-ecc (e.g. "My Google Client — Desktop" and "My Google Client — Web"). The app automatically selects the desktop client for CLI auth and the web client for web UI auth.
+
+6. Note the **Client ID** and **Client Secret** for each client.
 
 ### Account type: personal Google Account vs Google Workspace
 
