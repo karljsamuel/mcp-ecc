@@ -369,6 +369,7 @@ export class D1Storage implements StorageAdapter {
     for (const row of results as any[]) {
       if (row.key === 'encryptionKey') settings.encryptionKey = row.value;
       else if (row.key === 'uiPreferences') settings.uiPreferences = JSON.parse(row.value);
+      else if (row.key === 'sessions') (settings as any).sessions = JSON.parse(row.value);
       settings.updatedAt = Math.max(settings.updatedAt, row.updated_at);
     }
     return settings;
