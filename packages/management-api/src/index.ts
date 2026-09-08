@@ -135,13 +135,13 @@ export class ManagementApi {
     this.app.post('/api/auth/logout', async (request: any, reply: any) => {
       const token = request.cookies?.[SESSION_COOKIE];
       if (token) sessions.delete(token);
-      reply.clearCookie(SESSION_COOKIE, { path: '/', httpOnly: true, sameSite: 'lax' });
+      reply.clearCookie(SESSION_COOKIE, { path: '/', httpOnly: true, sameSite: 'lax', maxAge: 0 });
       return { success: true };
     });
 
     this.app.get('/api/auth/me', async (request: any, reply: any) => {
       const user = await currentUser(request);
-      if (!user) return reply.code(401).send({ error: 'Unauthorized' });
+      if (!user) { reply.clearCookie(SESSION_COOKIE, { path: '/', httpOnly: true, sameSite: 'lax', maxAge: 0 }); return reply.code(401).send({ error: 'Unauthorized' }); }
       return { user: publicUser(user) };
     });
 
@@ -197,6 +197,7 @@ export class ManagementApi {
           id: randomUUID(), ownerId, provider, label: client.label || `${name} client`,
           clientId: client.clientId, clientSecret: client.clientSecret || '',
           scopes: client.scopes || [], tenantId: client.tenantId, accountsServer: client.accountsServer,
+          clientPlatform: client.clientPlatform || 'web', clientType: client.clientType || 'confidential',
           enabled: true, createdAt: Date.now(), updatedAt: Date.now(),
         };
         await this.storage.saveOAuthClient(saved);
@@ -224,15 +225,17 @@ export class ManagementApi {
           oauthClient = clients.find((c) => c.provider === provider && c.enabled) || null;
         }
         if (oauthClient) {
-          // Resolve sibling web client if available under same name
-          const sibling = (await this.storage.listOAuthClients(ownerId)).find(c => 
-            c.provider === oauthClient!.provider &&
-            c.label === oauthClient!.label &&
-            c.clientPlatform === 'web' &&
-            c.enabled
-          );
-          if (sibling) {
-            oauthClient = sibling;
+          // Only resolve to a web-platform sibling when no explicit oauthClientId was given
+          if (!oauthClientId) {
+            const sibling = (await this.storage.listOAuthClients(ownerId)).find(c => 
+              c.provider === oauthClient!.provider &&
+              c.label === oauthClient!.label &&
+              c.clientPlatform === 'web' &&
+              c.enabled
+            );
+            if (sibling) {
+              oauthClient = sibling;
+            }
           }
           const redirectUri = `${this.publicUrl}/oauth/callback`;
           const flow = await this.oauthManager.startFlow(provider as ProviderName, 'device_code', OAuthManager.clientToConfig(oauthClient, redirectUri));

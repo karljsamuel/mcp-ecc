@@ -21,16 +21,12 @@ export function Layout({ children }: { children: ReactNode }) {
   return (
     <div className="flex min-h-screen">
       <aside className="fixed inset-y-0 left-0 z-40 w-16 shrink-0 border-r border-slate-200 bg-white md:w-64">
-        <div className="flex h-16 items-center gap-3 border-b border-slate-200 px-4">
+        <div className="flex h-16 items-center justify-center border-b border-slate-200 px-4">
           <img
             src="/Logo.png"
             alt="mcp-ecc"
-            className="h-9 w-9 rounded-lg object-cover"
+            className="h-auto w-36 md:w-48 object-contain"
           />
-          <div className="hidden md:block">
-            <div className="text-sm font-semibold text-slate-900">mcp-ecc</div>
-            <div className="text-xs text-slate-400">Admin Console</div>
-          </div>
         </div>
 
         <nav className="space-y-1 p-3">
