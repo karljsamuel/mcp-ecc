@@ -416,23 +416,30 @@ export class ManagementApi {
     });
 
     // OAuth callback completes a flow and stores tokens on the pending account.
-    this.app.get('/oauth/callback', async (request: any) => {
+    this.app.get('/oauth/callback', async (request: any, reply: any) => {
       const { code, state } = request.query;
-      if (!code || !state) return { error: 'Missing code or state' };
-      const oauthState = await this.storage.getOAuthState(String(state));
-      const tokens = await this.oauthManager.completeFlow(String(state), String(code));
-      if (oauthState?.accountId) {
-        await this.storage.updateCredentials(oauthState.accountId, {
-          accessToken: tokens.accessToken,
-          refreshToken: tokens.refreshToken,
-          expiryDate: tokens.expiresAt,
-          scope: tokens.scope,
-          idToken: tokens.idToken,
-          tokenType: tokens.tokenType,
-        } as any);
-        await this.storage.updateAccount(oauthState.accountId, { status: 'active', health: 'unknown' });
+      if (!code || !state) return reply.code(400).send({ error: 'Missing code or state' });
+      try {
+        const oauthState = await this.storage.getOAuthState(String(state));
+        const tokens = await this.oauthManager.completeFlow(String(state), String(code));
+        if (oauthState?.accountId) {
+          await this.storage.updateCredentials(oauthState.accountId, {
+            accessToken: tokens.accessToken,
+            refreshToken: tokens.refreshToken,
+            expiryDate: tokens.expiresAt,
+            scope: tokens.scope,
+            idToken: tokens.idToken,
+            tokenType: tokens.tokenType,
+          } as any);
+          await this.storage.updateAccount(oauthState.accountId, { status: 'active', health: 'unknown' });
+        }
+        // Return the browser to the authenticated admin UI instead of leaving
+        // it on a JSON callback response. The session cookie is same-origin.
+        return reply.redirect('/accounts?oauth=success');
+      } catch (error: any) {
+        const message = encodeURIComponent(error?.message || 'OAuth completion failed');
+        return reply.redirect(`/accounts?oauth=error&message=${message}`);
       }
-      return { success: true, message: 'OAuth complete. Return to the app to finish linking.' };
     });
 
     // --- OAuth clients (per-user) ---

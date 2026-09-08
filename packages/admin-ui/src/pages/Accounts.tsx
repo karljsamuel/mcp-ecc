@@ -62,7 +62,15 @@ export function Accounts({ push }: { push: ToastPush }) {
 
   useEffect(() => {
     void load();
-  }, [load]);
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('oauth') === 'success') {
+      push('OAuth completed successfully', 'success');
+      window.history.replaceState({}, '', window.location.pathname);
+    } else if (params.get('oauth') === 'error') {
+      push(params.get('message') || 'OAuth completion failed', 'error');
+      window.history.replaceState({}, '', window.location.pathname);
+    }
+  }, [load, push]);
 
   const editAccount = useMemo(
     () => accounts?.find((a) => a.id === editId) ?? null,
