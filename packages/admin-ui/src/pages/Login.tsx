@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { Alert } from '../components/ui';
 import type { ToastPush } from './toast';
@@ -9,8 +9,9 @@ export function Login({ push }: { push: ToastPush }) {
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const { login, refresh, needsBootstrap } = useAuth();
+  const { login, needsBootstrap } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
 
   // A fresh install has no admin account: send the user to create one
   // instead of showing a blank login (which would be unusable).
@@ -24,9 +25,9 @@ export function Login({ push }: { push: ToastPush }) {
     setBusy(true);
     try {
       await login(username, password);
-      await refresh();
       push('Signed in successfully', 'success');
-      navigate('/accounts', { replace: true });
+      const from = (location.state as { from?: { pathname: string } } | null)?.from?.pathname || '/accounts';
+      navigate(from, { replace: true });
     } catch (err: unknown) {
       const msg = (err as { message?: string })?.message ?? 'Login failed';
       setError(msg);
@@ -39,9 +40,7 @@ export function Login({ push }: { push: ToastPush }) {
     <div className="flex min-h-screen items-center justify-center bg-slate-100 p-4">
       <div className="card w-full max-w-md p-8">
         <div className="mb-6 flex items-center gap-3">
-          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-indigo-600 text-lg font-bold text-white">
-            Me
-          </div>
+          <img src="/Logo.png" alt="mcp-ecc" className="h-11 w-11 object-contain" />
           <div>
             <h1 className="text-xl font-semibold text-slate-900">mcp-ecc Admin</h1>
             <p className="text-sm text-slate-500">Sign in to manage your accounts</p>
