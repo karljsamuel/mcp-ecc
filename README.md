@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="Logo.png" alt="mcp-ecc" width="120" height="120" />
+<img src="Logo.png" alt="mcp-ecc" width="300" height="120" />
 
 # mcp-ecc
 
