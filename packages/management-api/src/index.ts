@@ -92,15 +92,39 @@ export class ManagementApi {
       return { needsBootstrap: count === 0 };
     });
 
-    // --- Auth: bootstrap + login use the session map ---
-    const sessions = new Map<string, string>(); // sessionToken -> userId
+    // --- Auth: sessions are persisted in the settings table so logins survive restarts ---
+    type SessionRecord = { token: string; userId: string; createdAt: number };
+
+    const loadSessions = async (): Promise<SessionRecord[]> => {
+      try {
+        const settings = await this.storage.getSettings();
+        return (settings as any)?.sessions || [];
+      } catch { return []; }
+    };
+    const saveSessions = async (list: SessionRecord[]) => {
+      const settings = await this.storage.getSettings();
+      await this.storage.saveSettings({ ...(settings as any), sessions: list, updatedAt: Date.now() });
+    };
+    const putSession = async (token: string, userId: string) => {
+      const list = await loadSessions();
+      list.push({ token, userId, createdAt: Date.now() });
+      await saveSessions(list);
+    };
+    const getSessionUser = async (token: string): Promise<User | null> => {
+      const list = await loadSessions();
+      const rec = list.find((s) => s.token === token);
+      if (!rec) return null;
+      return this.storage.getUser(rec.userId);
+    };
+    const deleteSession = async (token: string) => {
+      const list = await loadSessions();
+      await saveSessions(list.filter((s) => s.token !== token));
+    };
 
     const currentUser = async (req: any): Promise<User | null> => {
       const token = req.cookies?.[SESSION_COOKIE];
       if (!token) return null;
-      const userId = sessions.get(token);
-      if (!userId) return null;
-      return this.storage.getUser(userId);
+      return getSessionUser(token);
     };
 
     // First-run admin creation (only when no users exist — hard-gated)
@@ -113,7 +137,7 @@ export class ManagementApi {
       if (!username || !password) return reply.code(400).send({ error: 'username and password required' });
       const user = await this.authService.bootstrapAdmin({ username, displayName, password });
       const token = randomUUID();
-      sessions.set(token, user.id);
+      await putSession(token, user.id);
       reply.setCookie(SESSION_COOKIE, token, { httpOnly: true, sameSite: 'lax', path: '/', maxAge: 7 * 24 * 60 * 60 });
       return { user: publicUser(user), bootstrap: true };
     });
@@ -124,7 +148,7 @@ export class ManagementApi {
       try {
         const user = await this.authService.authenticate(username, password);
         const token = randomUUID();
-        sessions.set(token, user.id);
+        await putSession(token, user.id);
         reply.setCookie(SESSION_COOKIE, token, { httpOnly: true, sameSite: 'lax', path: '/', maxAge: 7 * 24 * 60 * 60 });
         return { user: publicUser(user) };
       } catch (e: any) {
@@ -134,7 +158,7 @@ export class ManagementApi {
 
     this.app.post('/api/auth/logout', async (request: any, reply: any) => {
       const token = request.cookies?.[SESSION_COOKIE];
-      if (token) sessions.delete(token);
+      if (token) await deleteSession(token);
       reply.clearCookie(SESSION_COOKIE, { path: '/', httpOnly: true, sameSite: 'lax', maxAge: 0 });
       return { success: true };
     });

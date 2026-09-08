@@ -546,6 +546,13 @@ export class D1Storage implements StorageAdapter {
         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
       `).bind(JSON.stringify(settings.uiPreferences), now).run();
     }
+    const sessions = (settings as any).sessions;
+    if (sessions) {
+      await this.db.prepare(`
+        INSERT INTO settings (key, value, updated_at) VALUES ('sessions', ?, ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+      `).bind(JSON.stringify(sessions), now).run();
+    }
   }
 
   // OAuth state
