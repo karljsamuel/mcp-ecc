@@ -335,6 +335,9 @@ export class ManagementApi {
       if (!client) {
         return reply.code(400).send({ error: `No OAuth client available for ${account.provider}. Add one in OAuth Clients first.` });
       }
+      if (!client.clientSecret && (client.clientType === 'confidential' || client.clientPlatform === 'web' || account.provider === 'google')) {
+        return reply.code(400).send({ error: `OAuth client '${client.label}' has no usable client secret. Edit or recreate this client with the secret.` });
+      }
       const redirectUri = `${this.publicUrl}/oauth/callback`;
       // Google cannot use device flow for Gmail/Calendar scopes. Web clients
       // must use the browser authorisation-code flow; device-capable clients

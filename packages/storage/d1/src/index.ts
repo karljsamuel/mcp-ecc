@@ -668,12 +668,12 @@ export class D1Storage implements StorageAdapter {
   async getOAuthClient(id: string): Promise<OAuthClient | null> {
     const row = await this.db.prepare('SELECT * FROM oauth_clients WHERE id = ?').bind(id).first();
     if (!row) return null;
-    return this.mapOAuthClient(row as any);
+    return await this.mapOAuthClient(row as any);
   }
 
   async listOAuthClients(ownerId: string): Promise<OAuthClient[]> {
     const { results } = await this.db.prepare('SELECT * FROM oauth_clients WHERE owner_id = ? ORDER BY provider, label').bind(ownerId).all();
-    return (results as any[]).map(r => this.mapOAuthClient(r));
+    return await Promise.all((results as any[]).map(r => this.mapOAuthClient(r)));
   }
 
   async deleteOAuthClient(id: string): Promise<void> {
@@ -761,14 +761,34 @@ export class D1Storage implements StorageAdapter {
     };
   }
 
-  private mapOAuthClient(row: any): OAuthClient {
+  private async decryptWithLegacyFallback(encryptedData: string): Promise<string> {
+    const current = this.decryptSync(encryptedData);
+    if (current) return current;
+
+    // Older D1 builds used WebCrypto AES-GCM with SHA-256-derived key material.
+    // Read that format so existing OAuth secrets remain usable after upgrading.
+    try {
+      const bytes = Uint8Array.from(atob(encryptedData), c => c.charCodeAt(0));
+      const iv = bytes.slice(0, 12);
+      const ciphertext = bytes.slice(12);
+      const material = new TextEncoder().encode(this.encryptionKey);
+      const digest = await crypto.subtle.digest('SHA-256', material);
+      const key = await crypto.subtle.importKey('raw', digest, 'AES-GCM', false, ['decrypt']);
+      const plaintext = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext);
+      return new TextDecoder().decode(plaintext);
+    } catch {
+      return '';
+    }
+  }
+
+  private async mapOAuthClient(row: any): Promise<OAuthClient> {
     return {
       id: row.id,
       ownerId: row.owner_id,
       provider: row.provider,
       label: row.label,
       clientId: row.client_id,
-      clientSecret: this.decryptSync(row.client_secret),
+      clientSecret: await this.decryptWithLegacyFallback(row.client_secret),
       scopes: JSON.parse(row.scopes_json),
       tenantId: row.tenant_id || undefined,
       accountsServer: row.accounts_server || undefined,
