@@ -1,7 +1,7 @@
 {
   "name": "@mcp-ecc/storage-d1",
-  "version": "0.4.0-beta.1",
-  "description": "Cloudflare D1 storage adapter for mcp-ecc (Workers)",
+  "version": "0.4.0-beta.2",
+  "description": "Cloudflare D1 storage adapter for mcp-ecc (HTTP REST API client for use in Node.js)",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
@@ -19,7 +19,9 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@mcp-ecc/core": "file:../../core"
+    "@mcp-ecc/core": "file:../../core",
+    "crypto-js": "^4.2.0",
+    "@types/crypto-js": "^4.2.0"
   },
   "devDependencies": {
     "typescript": "^5.9.3",

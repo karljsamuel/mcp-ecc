@@ -34,7 +34,7 @@ function publicUser(u: User, includeApiKey = false) {
   return base;
 }
 function publicClient(c: OAuthClient) {
-  return { id: c.id, provider: c.provider, label: c.label, clientId: c.clientId, scopes: c.scopes, tenantId: c.tenantId, accountsServer: c.accountsServer, enabled: c.enabled };
+  return { id: c.id, provider: c.provider, label: c.label, clientId: c.clientId, scopes: c.scopes, tenantId: c.tenantId, accountsServer: c.accountsServer, clientPlatform: c.clientPlatform, clientType: c.clientType, enabled: c.enabled };
 }
 
 export class ManagementApi {
@@ -44,6 +44,7 @@ export class ManagementApi {
   private authService: AuthService;
   private config: ManagementApiConfig;
   private publicUrl: string;
+  private healthTimer?: ReturnType<typeof setInterval>;
 
   constructor(config: ManagementApiConfig) {
     this.config = config;
@@ -74,6 +75,62 @@ export class ManagementApi {
     this.app.register(staticFiles, { root: this.config.publicDir, prefix: '/' });
   }
 
+  private async refreshAccountHealth(): Promise<void> {
+    const accounts = await this.storage.listAccounts();
+    for (const account of accounts) {
+      try {
+        await this.checkAccountConnection(account);
+        await this.storage.updateAccount(account.id, { health: 'healthy', status: 'active' });
+      } catch {
+        await this.storage.updateAccount(account.id, { health: 'unhealthy' });
+      }
+    }
+  }
+
+  private async checkAccountConnection(account: any): Promise<string> {
+    const credentials = account.credentials || {};
+    switch (account.provider) {
+      case 'google': {
+        const { GoogleProvider } = await import('@mcp-ecc/provider-google');
+        const provider = new GoogleProvider(account.id, credentials);
+        await provider.listFolders();
+        return 'Google Gmail connection succeeded.';
+      }
+      case 'microsoft': {
+        const { MicrosoftProvider } = await import('@mcp-ecc/provider-microsoft');
+        const provider = new MicrosoftProvider(account.id, credentials);
+        await provider.listFolders();
+        return 'Microsoft Graph connection succeeded.';
+      }
+      case 'zoho': {
+        const { ZohoProvider } = await import('@mcp-ecc/provider-zoho');
+        const provider = new ZohoProvider(account.id, credentials);
+        await provider.listFolders();
+        return 'Zoho Mail connection succeeded.';
+      }
+      case 'imap': {
+        const { ImapSmtpProvider } = await import('@mcp-ecc/provider-imap-smtp');
+        const provider = new ImapSmtpProvider(account.id, credentials);
+        await provider.listFolders();
+        return 'IMAP connection succeeded.';
+      }
+      case 'caldav': {
+        const { CalDAVProvider } = await import('@mcp-ecc/provider-caldav');
+        const provider = new CalDAVProvider(account.id, credentials);
+        await provider.listCalendars();
+        return 'CalDAV connection succeeded.';
+      }
+      case 'carddav': {
+        const { CardDAVProvider } = await import('@mcp-ecc/provider-carddav');
+        const provider = new CardDAVProvider(account.id, credentials);
+        await provider.listContacts({ limit: 1 });
+        return 'CardDAV connection succeeded.';
+      }
+      default:
+        throw new Error(`Unsupported provider: ${account.provider}`);
+    }
+  }
+
   private setupRoutes(): void {
     // --- Health (public) ---
     this.app.get('/health', async () => ({ status: 'ok', timestamp: Date.now() }));
@@ -83,6 +140,7 @@ export class ManagementApi {
       publicUrl: this.publicUrl,
       oauthRedirectUri: `${this.publicUrl}/oauth/callback`,
       mcpEndpoint: `${this.publicUrl}/mcp`,
+      storage: { provider: process.env.MCP_DB_PROVIDER || 'sqlite' },
     }));
 
     // --- Public bootstrap status (no auth): used to show the 'create admin' screen ---
@@ -91,15 +149,39 @@ export class ManagementApi {
       return { needsBootstrap: count === 0 };
     });
 
-    // --- Auth: bootstrap + login use the session map ---
-    const sessions = new Map<string, string>(); // sessionToken -> userId
+    // --- Auth: sessions are persisted in the settings table so logins survive restarts ---
+    type SessionRecord = { token: string; userId: string; createdAt: number };
+
+    const loadSessions = async (): Promise<SessionRecord[]> => {
+      try {
+        const settings = await this.storage.getSettings();
+        return (settings as any)?.sessions || [];
+      } catch { return []; }
+    };
+    const saveSessions = async (list: SessionRecord[]) => {
+      const settings = await this.storage.getSettings();
+      await this.storage.saveSettings({ ...(settings as any), sessions: list, updatedAt: Date.now() });
+    };
+    const putSession = async (token: string, userId: string) => {
+      const list = await loadSessions();
+      list.push({ token, userId, createdAt: Date.now() });
+      await saveSessions(list);
+    };
+    const getSessionUser = async (token: string): Promise<User | null> => {
+      const list = await loadSessions();
+      const rec = list.find((s) => s.token === token);
+      if (!rec) return null;
+      return this.storage.getUser(rec.userId);
+    };
+    const deleteSession = async (token: string) => {
+      const list = await loadSessions();
+      await saveSessions(list.filter((s) => s.token !== token));
+    };
 
     const currentUser = async (req: any): Promise<User | null> => {
       const token = req.cookies?.[SESSION_COOKIE];
       if (!token) return null;
-      const userId = sessions.get(token);
-      if (!userId) return null;
-      return this.storage.getUser(userId);
+      return getSessionUser(token);
     };
 
     // First-run admin creation (only when no users exist — hard-gated)
@@ -112,7 +194,7 @@ export class ManagementApi {
       if (!username || !password) return reply.code(400).send({ error: 'username and password required' });
       const user = await this.authService.bootstrapAdmin({ username, displayName, password });
       const token = randomUUID();
-      sessions.set(token, user.id);
+      await putSession(token, user.id);
       reply.setCookie(SESSION_COOKIE, token, { httpOnly: true, sameSite: 'lax', path: '/', maxAge: 7 * 24 * 60 * 60 });
       return { user: publicUser(user), bootstrap: true };
     });
@@ -123,7 +205,7 @@ export class ManagementApi {
       try {
         const user = await this.authService.authenticate(username, password);
         const token = randomUUID();
-        sessions.set(token, user.id);
+        await putSession(token, user.id);
         reply.setCookie(SESSION_COOKIE, token, { httpOnly: true, sameSite: 'lax', path: '/', maxAge: 7 * 24 * 60 * 60 });
         return { user: publicUser(user) };
       } catch (e: any) {
@@ -133,14 +215,14 @@ export class ManagementApi {
 
     this.app.post('/api/auth/logout', async (request: any, reply: any) => {
       const token = request.cookies?.[SESSION_COOKIE];
-      if (token) sessions.delete(token);
-      reply.clearCookie(SESSION_COOKIE, { path: '/', httpOnly: true, sameSite: 'lax' });
+      if (token) await deleteSession(token);
+      reply.clearCookie(SESSION_COOKIE, { path: '/', httpOnly: true, sameSite: 'lax', maxAge: 0 });
       return { success: true };
     });
 
     this.app.get('/api/auth/me', async (request: any, reply: any) => {
       const user = await currentUser(request);
-      if (!user) return reply.code(401).send({ error: 'Unauthorized' });
+      if (!user) { reply.clearCookie(SESSION_COOKIE, { path: '/', httpOnly: true, sameSite: 'lax', maxAge: 0 }); return reply.code(401).send({ error: 'Unauthorized' }); }
       return { user: publicUser(user) };
     });
 
@@ -196,6 +278,7 @@ export class ManagementApi {
           id: randomUUID(), ownerId, provider, label: client.label || `${name} client`,
           clientId: client.clientId, clientSecret: client.clientSecret || '',
           scopes: client.scopes || [], tenantId: client.tenantId, accountsServer: client.accountsServer,
+          clientPlatform: client.clientPlatform || 'web', clientType: client.clientType || 'confidential',
           enabled: true, createdAt: Date.now(), updatedAt: Date.now(),
         };
         await this.storage.saveOAuthClient(saved);
@@ -223,8 +306,21 @@ export class ManagementApi {
           oauthClient = clients.find((c) => c.provider === provider && c.enabled) || null;
         }
         if (oauthClient) {
+          // Only resolve to a web-platform sibling when no explicit oauthClientId was given
+          if (!oauthClientId) {
+            const sibling = (await this.storage.listOAuthClients(ownerId)).find(c => 
+              c.provider === oauthClient!.provider &&
+              c.label === oauthClient!.label &&
+              c.clientPlatform === 'web' &&
+              c.enabled
+            );
+            if (sibling) {
+              oauthClient = sibling;
+            }
+          }
           const redirectUri = `${this.publicUrl}/oauth/callback`;
-          const flow = await this.oauthManager.startFlow(provider as ProviderName, 'device_code', OAuthManager.clientToConfig(oauthClient, redirectUri));
+          const flowType = provider === 'google' || provider === 'microsoft' || oauthClient.clientPlatform === 'web' ? 'authorization_code' : 'device_code';
+          const flow = await this.oauthManager.startFlow(provider as ProviderName, flowType, OAuthManager.clientToConfig(oauthClient, redirectUri), account.id);
           await this.storage.updateCredentials(account.id, { oauthClientId: oauthClient.id });
           return reply.code(201).send({
             account: { id: account.id, slug: account.slug, name: account.name },
@@ -232,12 +328,25 @@ export class ManagementApi {
             verificationUri: flow.verificationUri,
             userCode: flow.userCode,
             deviceCode: flow.deviceCode,
-            message: `Account created. Go to ${flow.verificationUri} and enter code: ${flow.userCode}`,
+            message: flowType === 'device_code' ? `Account created. Go to ${flow.verificationUri} and enter code: ${flow.userCode}` : 'Account created. Open the authorisation URL to complete setup.',
           });
         }
       }
 
       return reply.code(201).send({ account: { id: account.id, slug: account.slug, name: account.name } });
+    });
+
+    this.app.post('/api/accounts/:id/test-connection', async (request: any, reply: any) => {
+      const account = await this.storage.getAccount(request.params.id);
+      if (!account || account.ownerId !== request.user.id) return reply.code(404).send({ error: 'Account not found' });
+      try {
+        const message = await this.checkAccountConnection(account);
+        await this.storage.updateAccount(account.id, { health: 'healthy', status: 'active' });
+        return { ok: true, message, checkedAt: Date.now() };
+      } catch (error: any) {
+        await this.storage.updateAccount(account.id, { health: 'unhealthy' });
+        return { ok: false, message: error?.message || 'Provider connection failed', checkedAt: Date.now() };
+      }
     });
 
     this.app.patch('/api/accounts/:id', async (request: any, reply: any) => {
@@ -273,22 +382,67 @@ export class ManagementApi {
         const clients = await this.storage.listOAuthClients(request.user.id);
         client = clients.find((c) => c.provider === account.provider && c.enabled) || null;
       }
+      if (client) {
+        // Resolve sibling web client if available under same name
+        const sibling = account.provider === 'microsoft' ? undefined : (await this.storage.listOAuthClients(request.user.id)).find(c =>
+          c.provider === client!.provider &&
+          c.label === client!.label &&
+          c.clientPlatform === 'web' &&
+          c.enabled
+        );
+        if (sibling) {
+          client = sibling;
+        }
+      }
       if (!client) {
         return reply.code(400).send({ error: `No OAuth client available for ${account.provider}. Add one in OAuth Clients first.` });
       }
+      if (!client.clientSecret && (client.clientType === 'confidential' || client.clientPlatform === 'web' || account.provider === 'google')) {
+        return reply.code(400).send({ error: `OAuth client '${client.label}' has no usable client secret. Edit or recreate this client with the secret.` });
+      }
       const redirectUri = `${this.publicUrl}/oauth/callback`;
-      const flow = await this.oauthManager.startFlow(account.provider as ProviderName, 'device_code', OAuthManager.clientToConfig(client, redirectUri));
-      // Persist the chosen client on the account for later token refresh.
-      await this.storage.updateCredentials(account.id, { oauthClientId: client.id });
-      return { authorizeUrl: flow.verificationUri, verificationUri: flow.verificationUri, userCode: flow.userCode, deviceCode: flow.deviceCode, interval: flow.interval, state: flow.state, message: `Go to ${flow.verificationUri} and enter code: ${flow.userCode}` };
+      // Google cannot use device flow for Gmail/Calendar scopes. Web clients
+      // must use the browser authorisation-code flow; device-capable clients
+      // use device flow for Microsoft/Zoho.
+      const flowType = account.provider === 'google' || account.provider === 'microsoft' || client.clientPlatform === 'web' ? 'authorization_code' : 'device_code';
+      try {
+        const flow = await this.oauthManager.startFlow(account.provider as ProviderName, flowType, OAuthManager.clientToConfig(client, redirectUri), account.id);
+        // Persist the chosen client on the account for later token refresh.
+        await this.storage.updateCredentials(account.id, { oauthClientId: client.id });
+        return { authorizeUrl: flow.verificationUri, verificationUri: flow.verificationUri, userCode: flow.userCode, deviceCode: flow.deviceCode, interval: flow.interval, state: flow.state, message: flowType === 'device_code' ? `Go to ${flow.verificationUri} and enter code: ${flow.userCode}` : 'Open the authorisation URL to complete reauthentication.' };
+      } catch (error: any) {
+        return reply.code(400).send({ error: error?.message || 'Unable to start reauthentication flow' });
+      }
     });
 
     // OAuth callback completes a flow and stores tokens on the pending account.
-    this.app.get('/oauth/callback', async (request: any) => {
+    this.app.get('/oauth/callback', async (request: any, reply: any) => {
       const { code, state } = request.query;
-      if (!code || !state) return { error: 'Missing code or state' };
-      const tokens = await this.oauthManager.completeFlow(String(state), String(code));
-      return { success: true, message: 'OAuth complete. Return to the app to finish linking.' };
+      if (!code || !state) return reply.code(400).send({ error: 'Missing code or state' });
+      try {
+        const oauthState = await this.storage.getOAuthState(String(state));
+        const tokens = await this.oauthManager.completeFlow(String(state), String(code));
+        if (oauthState?.accountId) {
+          await this.storage.updateCredentials(oauthState.accountId, {
+            accessToken: tokens.accessToken,
+            refreshToken: tokens.refreshToken,
+            expiryDate: tokens.expiresAt,
+            scope: tokens.scope,
+            idToken: tokens.idToken,
+            tokenType: tokens.tokenType,
+            clientId: oauthState.clientId,
+            clientSecret: oauthState.clientSecret,
+            config: { accountsServer: oauthState.accountsServer },
+          } as any);
+          await this.storage.updateAccount(oauthState.accountId, { status: 'active', health: 'unknown' });
+        }
+        // Return the browser to the authenticated admin UI instead of leaving
+        // it on a JSON callback response. The session cookie is same-origin.
+        return reply.redirect('/accounts?oauth=success');
+      } catch (error: any) {
+        const message = encodeURIComponent(error?.message || 'OAuth completion failed');
+        return reply.redirect(`/accounts?oauth=error&message=${message}`);
+      }
     });
 
     // --- OAuth clients (per-user) ---
@@ -298,12 +452,12 @@ export class ManagementApi {
     });
 
     this.app.post('/api/oauth-clients', async (request: any, reply: any) => {
-      const { provider, label, clientId, clientSecret, scopes, tenantId, accountsServer } = request.body;
+      const { provider, label, clientId, clientSecret, scopes, tenantId, accountsServer, clientPlatform, clientType } = request.body;
       if (!provider || !label || !clientId) return reply.code(400).send({ error: 'provider, label, clientId required' });
       if (!AUTH_PROVIDERS.includes(provider)) return reply.code(400).send({ error: `Unsupported provider: ${provider}` });
       const client: OAuthClient = {
         id: randomUUID(), ownerId: request.user.id, provider, label, clientId, clientSecret: clientSecret || '',
-        scopes: scopes || [], tenantId, accountsServer, enabled: true, createdAt: Date.now(), updatedAt: Date.now(),
+        scopes: scopes || [], tenantId, accountsServer, clientPlatform, clientType, enabled: true, createdAt: Date.now(), updatedAt: Date.now(),
       };
       await this.storage.saveOAuthClient(client);
       return reply.code(201).send({ client: publicClient(client) });
@@ -317,7 +471,26 @@ export class ManagementApi {
     });
 
     // --- Users (admin only) ---
-    this.app.get('/api/users', async (request: any, reply: any) => {
+    
+    this.app.patch('/api/oauth-clients/:id', async (request: any, reply: any) => {
+      const client = await this.storage.getOAuthClient(request.params.id);
+      if (!client || client.ownerId !== request.user.id) return reply.code(404).send({ error: 'Client not found' });
+      const { label, clientId, clientSecret, scopes, tenantId, accountsServer, clientPlatform, clientType } = request.body;
+      const updates: any = { updatedAt: Date.now() };
+      if (label !== undefined) updates.label = label;
+      if (clientId !== undefined) updates.clientId = clientId;
+      if (clientSecret !== undefined) updates.clientSecret = clientSecret;
+      if (scopes !== undefined) updates.scopes = scopes;
+      if (tenantId !== undefined) updates.tenantId = tenantId;
+      if (accountsServer !== undefined) updates.accountsServer = accountsServer;
+      if (clientPlatform !== undefined) updates.clientPlatform = clientPlatform;
+      if (clientType !== undefined) updates.clientType = clientType;
+      const merged = { ...client, ...updates };
+      await this.storage.saveOAuthClient(merged);
+      return { client: publicClient(merged) };
+    });
+
+this.app.get('/api/users', async (request: any, reply: any) => {
       if (request.user.role !== 'admin') return reply.code(403).send({ error: 'Admin only' });
       const users = await this.storage.listUsers();
       return { users: users.map((u) => publicUser(u, false)) };
@@ -503,10 +676,15 @@ export class ManagementApi {
 
   async start(): Promise<void> {
     await this.app.listen({ port: this.config.port, host: this.config.host });
+    // Check persisted accounts once at startup and periodically thereafter.
+    void this.refreshAccountHealth();
+    this.healthTimer = setInterval(() => void this.refreshAccountHealth(), 5 * 60 * 1000);
+    this.healthTimer.unref?.();
     console.log(`mcp-ecc management API listening on http://${this.config.host}:${this.config.port}`);
   }
 
   async stop(): Promise<void> {
+    if (this.healthTimer) clearInterval(this.healthTimer);
     await this.app.close();
   }
 

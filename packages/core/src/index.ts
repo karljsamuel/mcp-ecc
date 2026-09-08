@@ -1,6 +1,7 @@
 // Core types and interfaces
 export * from './types.js';
 export * from './storage.js';
+export * from './schema.js';
 export * from './oauth.js';
 export * from './auth.js';
 

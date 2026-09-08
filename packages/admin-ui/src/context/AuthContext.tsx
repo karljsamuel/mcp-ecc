@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from 'react';
@@ -29,6 +30,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [needsBootstrap, setNeedsBootstrap] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
+  const initialCheckDone = useRef(false);
+  const authGeneration = useRef(0);
 
   const redirectToLogin = useCallback(() => {
     setUser(null);
@@ -37,29 +40,36 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [navigate, location.pathname]);
 
+  // Only set the unauthorized handler AFTER the initial auth check resolves.
+  // During initial load, refresh() handles the 401 itself.
   useEffect(() => {
+    if (!initialCheckDone.current) return;
     setUnauthorizedHandler(redirectToLogin);
     return () => setUnauthorizedHandler(null);
   }, [redirectToLogin]);
 
   const refresh = useCallback(async () => {
+    const checkGeneration = ++authGeneration.current;
     try {
       const { user: u } = await authApi.me();
+      if (checkGeneration !== authGeneration.current) return authGeneration.current ? user : null;
       setUser(u);
       setLoading(false);
       setNeedsBootstrap(false);
+      initialCheckDone.current = true;
       return u;
     } catch {
+      if (checkGeneration !== authGeneration.current) return user;
       // Not logged in — check whether we need to bootstrap the first admin.
       try {
         const { needsBootstrap } = await infoApi.bootstrapStatus();
         setNeedsBootstrap(!!needsBootstrap);
-        setLoading(false);
       } catch {
         setNeedsBootstrap(false);
-        setLoading(false);
       }
       setUser(null);
+      setLoading(false);
+      initialCheckDone.current = true;
       return null;
     }
   }, []);
@@ -70,6 +80,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = useCallback(
     async (username: string, password: string) => {
+      ++authGeneration.current;
       const { user: u } = await authApi.login(username, password);
       setUser(u);
       setNeedsBootstrap(false);
@@ -78,7 +89,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const logout = useCallback(async () => {
-    // Clear local state first so the UI immediately reflects signed-out.
     setUser(null);
     setNeedsBootstrap(false);
     try {

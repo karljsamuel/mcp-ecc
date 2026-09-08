@@ -7,6 +7,7 @@ import { Login } from './pages/Login';
 import { Bootstrap } from './pages/Bootstrap';
 import { Accounts } from './pages/Accounts';
 import { Users } from './pages/Users';
+import { OAuthClients } from './pages/OAuthClients';
 import { Settings } from './pages/Settings';
 
 export function useToasts() {
@@ -64,6 +65,7 @@ function Router() {
                 <Routes>
                   <Route path="accounts" element={<Accounts push={push} />} />
                   <Route path="accounts/:id" element={<Accounts push={push} />} />
+                  <Route path="oauth-clients" element={<OAuthClients push={push} />} />
                   <Route
                     path="users"
                     element={

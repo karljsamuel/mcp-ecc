@@ -23,8 +23,20 @@ Each user connecting a Zoho account creates their own client in the Zoho API Con
 1. Go to the [Zoho API Console](https://api-console.zoho.com/)
 2. **Create a self-client** (or a client of the relevant type); for Mail/Calendar/Contacts a *self client* is simplest
 3. Enable the scopes for the products you use (see below)
-4. Set the redirect URI: `http://localhost:3001/oauth/callback` and your deployed `BASE_URL/oauth/callback`
+4. Set the redirect URI: `http://localhost:3001/oauth/callback` and your deployed `PUBLIC_URL/oauth/callback`
 5. Note the **Client ID** and **Client Secret**
+
+### Platform selection
+
+Zoho can be created both as a limited-input (self-client) and a web client. mcp-ecc supports all three platforms for Zoho:
+
+| Platform | Zoho client type | When to use |
+|----------|------------------|-------------|
+| **limited_input** | **Self-client** | Zoho's OAuth flow works in the browser where the user copies the code back. Most reliable for CLI. |
+| **web** | **Web client** | Web UI / Docker — uses the redirect URI. |
+| **desktop** | **Desktop client** | CLI with local redirect server. |
+
+Register the same Zoho app under one label with platform `limited_input` for CLI and a sibling with platform `web` for the web UI.
 
 ## 2. Scopes requested
 

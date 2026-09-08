@@ -9,7 +9,7 @@ on:
       version:
         description: 'Semver to publish (e.g. 0.4.0-beta.1)'
         required: true
-        default: '0.4.0-beta.1'
+        default: '0.4.0-beta.2'
       to_mcp_registry:
         description: 'Also publish to the MCP Registry (needs mcp-publisher)'
         required: false
@@ -57,7 +57,6 @@ jobs:
           set -e
           for pkg in \
             packages/core \
-            packages/storage/memory \
             packages/storage/sqlite \
             packages/storage/d1 \
             packages/providers/google \
