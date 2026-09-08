@@ -72,7 +72,8 @@ export class ZohoProvider implements IMailProvider, ICalendarProvider, IContacts
 
     if (!response.ok) {
       const error: any = await response.json().catch(() => ({}));
-      throw new Error(`Zoho API error: ${response.status} - ${error.message || response.statusText}`);
+      const detail = error.message || error.error || error.error_description || error.errorCode || JSON.stringify(error);
+      throw new Error(`Zoho API error: ${response.status} - ${detail || response.statusText}`);
     }
 
     return response.json() as Promise<T>;
@@ -325,46 +326,40 @@ export class ZohoProvider implements IMailProvider, ICalendarProvider, IContacts
       attendees: event.attendees?.map(a => ({ email: a.address, is_organizer: false })),
     };
     const url = `https://calendar.zoho.com/api/v1/calendars/${encodeURIComponent(calendarId)}/events?eventdata=${encodeURIComponent(JSON.stringify(eventdata))}`;
-    const res = await this.fetchZoho<{ events: any[] }>(url, { method: 'POST' });
-    return this.mapEvent((res.events || [])[0] || res);
+    const res = await this.fetchZoho<{ events?: any[]; event?: any }>(url, { method: 'POST' });
+    return this.mapEvent((res.events || [])[0] || res.event || res);
   }
 
   async updateEvent(calendarId: string, eventId: string, patches: UpdateEventInput): Promise<CalendarEvent> {
-    const res = await this.fetchZoho<{ event: any }>(
-      `https://calendar.zoho.com/api/v1/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`,
-      {
-        method: 'PUT',
-        body: JSON.stringify({
-          title: patches.summary,
-          description: patches.description,
-          location: patches.location,
-          startTime: patches.startAt ? new Date(patches.startAt).toISOString() : undefined,
-          endTime: patches.endAt ? new Date(patches.endAt).toISOString() : undefined,
-          allDay: patches.allDay,
-        }),
-      }
-    );
-    return this.mapEvent(res.event || res);
+    const current = await this.getEvent(calendarId, eventId);
+    const raw: any = current.raw || {};
+    const startAt = patches.startAt ?? current.startAt;
+    const endAt = patches.endAt ?? current.endAt;
+    const eventdata = {
+      eventid: raw.eventid || raw.eventId || raw.uid || eventId,
+      etag: raw.etag,
+      title: patches.summary ?? current.summary,
+      description: patches.description ?? current.description,
+      location: patches.location ?? current.location,
+      dateandtime: {
+        timezone: 'Asia/Kolkata',
+        start: this.zohoEventTime(startAt),
+        end: this.zohoEventTime(endAt),
+      },
+      isallday: patches.allDay ?? current.allDay,
+    };
+    const url = `https://calendar.zoho.com/api/v1/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventdata.eventid)}?eventdata=${encodeURIComponent(JSON.stringify(eventdata))}`;
+    const res = await this.fetchZoho<{ event?: any; events?: any[] }>(url, { method: 'PUT' });
+    return this.mapEvent((res.events || [])[0] || res.event || res);
   }
 
   async deleteEvent(calendarId: string, eventId: string): Promise<void> {
-    // Zoho requires the event UID in the path and the etag header (or eventdata
-    // with UID). Accept either the UID or numeric id — fetch the event to get
-    // its UID/etag when needed.
-    let targetId = eventId;
-    let etag = '';
-    try {
-      const ev = await this.getEvent(calendarId, eventId);
-      const uid = ev.raw?.uid as string | undefined;
-      if (uid) {
-        targetId = uid;
-        etag = ev.raw?.etag ? String(ev.raw.etag) : '';
-      }
-    } catch {}
-    await this.fetchZoho(
-      `https://calendar.zoho.com/api/v1/calendars/${calendarId}/events/${targetId}`,
-      { method: 'DELETE', headers: etag ? { etag } : undefined }
-    );
+    const current = await this.getEvent(calendarId, eventId);
+    const raw: any = current.raw || {};
+    const targetId = raw.eventid || raw.eventId || raw.uid || eventId;
+    const eventdata = { eventid: targetId, etag: raw.etag };
+    const url = `https://calendar.zoho.com/api/v1/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(targetId)}?eventdata=${encodeURIComponent(JSON.stringify(eventdata))}`;
+    await this.fetchZoho(url, { method: 'DELETE' });
   }
 
   async freeBusy(calendarIds: string[], timeMin: number, timeMax: number): Promise<Array<{ calendarId: string; busy: Array<{ start: number; end: number }> }>> {
