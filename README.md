@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="Logo.png" alt="mcp-ecc" width="120" height="120" />
+
 # mcp-ecc
 
 ### Email · Calendar · Contacts — one MCP server for all your accounts
