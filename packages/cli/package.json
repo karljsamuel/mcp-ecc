@@ -1,6 +1,6 @@
 {
   "name": "mcp-ecc",
-  "version": "0.5.0-beta.1",
+  "version": "0.5.1",
   "mcpName": "io.github.karljsamuel/mcp-ecc",
   "description": "MCP server for Email, Calendar & Contacts \u2014 Google, Microsoft 365, Zoho, IMAP/SMTP, CalDAV, CardDAV",
   "type": "module",

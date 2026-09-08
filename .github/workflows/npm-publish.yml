@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Semver to publish (e.g. 0.4.0-beta.1)'
+        description: 'Semver to publish (e.g. 0.5.1)'
         required: true
-        default: '0.5.0-beta.1'
+        default: '0.5.1'
       to_mcp_registry:
         description: 'Also publish to the MCP Registry (needs mcp-publisher)'
         required: false
@@ -68,13 +68,13 @@ jobs:
             packages/mcp-server \
             packages/management-api; do
             echo "publishing $pkg"
-            npm publish "./$pkg" --access public --tag beta
+            npm publish "./$pkg" --access public
           done
 
       - name: Publish entry package
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish ./packages/cli --access public --tag beta
+        run: npm publish ./packages/cli --access public
 
       - name: Publish to MCP Registry
         if: ${{ github.event.inputs.to_mcp_registry == 'true' }}

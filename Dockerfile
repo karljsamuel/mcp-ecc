@@ -9,7 +9,7 @@
 
 FROM node:24-alpine AS builder
 WORKDIR /app
-RUN npm install -g turbo && apk add --no-cache python3 make g++
+RUN apk upgrade --no-cache && apk add --no-cache python3 make g++ && npm install -g turbo
 
 # Copy the full repo workspace (source + manifests; node_modules/dist excluded)
 COPY package.json package-lock.json turbo.json ./
@@ -33,9 +33,9 @@ LABEL org.opencontainers.image.title="mcp-ecc"
 LABEL org.opencontainers.image.description="MCP server for Email, Calendar & Contacts — Google, Microsoft 365, Zoho, IMAP/SMTP, CalDAV, CardDAV. Multi-user admin UI and per-user MCP API keys."
 LABEL org.opencontainers.image.licenses="MIT"
 
-RUN addgroup --system --gid 1001 nodejs \
-  && adduser --system --uid 1001 mcp-ecc \
-  && apk add --no-cache python3 make g++
+RUN apk upgrade --no-cache \
+  && addgroup --system --gid 1001 nodejs \
+  && adduser --system --uid 1001 mcp-ecc
 
 # Copy manifests + full workspace from the builder
 COPY --from=builder /app/package.json ./package.json
