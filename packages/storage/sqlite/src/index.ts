@@ -1,5 +1,6 @@
 import { DatabaseSync } from 'node:sqlite';
 import { StorageAdapter, User, Account, OAuthClient, AccountCredentials, SyncState, Settings, EmailMessage, MailFolder, CalendarEvent, Calendar, Contact, OAuthStateData } from '@mcp-ecc/core';
+import { SCHEMA_MIGRATIONS, MIGRATION_LEDGER_SQL, READ_MIGRATIONS_SQL, RECORD_MIGRATION_SQL, migrationColumns } from '@mcp-ecc/core';
 import CryptoJS from 'crypto-js';
 
 export class SQLiteStorage implements StorageAdapter {
@@ -9,74 +10,41 @@ export class SQLiteStorage implements StorageAdapter {
   constructor(dbPath: string, encryptionKey = 'default-secret-key') {
     this.encryptionKey = encryptionKey;
     this.db = new DatabaseSync(dbPath);
-    this.initTables();
+    try {
+      this.initSchema();
+    } catch (error) {
+      this.db.close();
+      throw error;
+    }
   }
 
-  private initTables() {
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS users (
-        id TEXT PRIMARY KEY,
-        username TEXT UNIQUE NOT NULL,
-        displayName TEXT NOT NULL,
-        passwordHash TEXT NOT NULL,
-        role TEXT NOT NULL,
-        mcpApiKey TEXT,
-        createdAt INTEGER NOT NULL,
-        updatedAt INTEGER NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS accounts (
-        id TEXT PRIMARY KEY,
-        ownerId TEXT NOT NULL,
-        provider TEXT NOT NULL,
-        name TEXT,
-        slug TEXT NOT NULL,
-        email TEXT NOT NULL,
-        status TEXT NOT NULL,
-        credentials TEXT NOT NULL,
-        createdAt INTEGER NOT NULL,
-        updatedAt INTEGER NOT NULL,
-        UNIQUE(ownerId, slug)
-      );
-
-      CREATE TABLE IF NOT EXISTS oauth_clients (
-        id TEXT PRIMARY KEY,
-        ownerId TEXT NOT NULL,
-        provider TEXT NOT NULL,
-        label TEXT NOT NULL,
-        clientId TEXT NOT NULL,
-        clientSecret TEXT NOT NULL,
-        scopes TEXT NOT NULL,
-        tenantId TEXT,
-        accountsServer TEXT,
-        clientType TEXT,
-        enabled INTEGER NOT NULL,
-        createdAt INTEGER NOT NULL,
-        updatedAt INTEGER NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS settings (
-        id TEXT PRIMARY KEY,
-        data TEXT NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS oauth_states (
-        state TEXT PRIMARY KEY,
-        data TEXT NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS sync_states (
-        accountId TEXT PRIMARY KEY,
-        data TEXT NOT NULL
-      );
-    `);
-    // Migration for existing databases created before clientType existed
-    const cols = this.db.prepare(`PRAGMA table_info(oauth_clients)`).all() as any[];
-    if (!cols.some((c: any) => c.name === 'clientType')) {
-      this.db.exec(`ALTER TABLE oauth_clients ADD COLUMN clientType TEXT`);
+  /** Synchronous for constructor compatibility; safe to call again at startup. */
+  initSchema(): void {
+    this.db.exec(MIGRATION_LEDGER_SQL);
+    for (const migration of SCHEMA_MIGRATIONS) {
+      // Lock before reading the ledger so concurrent SQLite startups serialize.
+      this.db.exec('BEGIN IMMEDIATE');
+      try {
+        const applied = this.db.prepare(READ_MIGRATIONS_SQL).all() as { version: number }[];
+        if (!applied.some(row => row.version === migration.version)) {
+          for (const sql of migration.statements?.('sqlite') || []) this.db.exec(sql);
+          for (const column of migrationColumns(migration, 'sqlite')) {
+            this.ensureColumn(column.table, column.name, column.definition);
+          }
+          this.db.prepare(RECORD_MIGRATION_SQL).run(migration.version, migration.name, Date.now());
+        }
+        this.db.exec('COMMIT');
+      } catch (error) {
+        this.db.exec('ROLLBACK');
+        throw new Error(`SQLite schema migration ${migration.version} (${migration.name}) failed`, { cause: error });
+      }
     }
-    if (!cols.some((c: any) => c.name === 'clientPlatform')) {
-      this.db.exec(`ALTER TABLE oauth_clients ADD COLUMN clientPlatform TEXT`);
+  }
+
+  private ensureColumn(table: string, column: string, definition: string): void {
+    const columns = this.db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+    if (!columns.some(existing => existing.name === column)) {
+      this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
     }
   }
 

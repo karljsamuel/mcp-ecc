@@ -14,6 +14,7 @@ import type {
   User,
 } from '@mcp-ecc/core';
 import { generateId } from '@mcp-ecc/core';
+import { SCHEMA_MIGRATIONS, MIGRATION_LEDGER_SQL, READ_MIGRATIONS_SQL, RECORD_MIGRATION_SQL, migrationColumns } from '@mcp-ecc/core';
 import CryptoJS from 'crypto-js';
 
 export interface D1Database {
@@ -174,6 +175,7 @@ class CloudflareD1PreparedStatement implements D1PreparedStatement {
 export class D1Storage implements StorageAdapter {
   private db: D1Database;
   private encryptionKey: string;
+  private schemaInitialization?: Promise<void>;
 
   constructor(db: D1Database, encryptionKey?: string) {
     this.db = db;
@@ -181,224 +183,46 @@ export class D1Storage implements StorageAdapter {
   }
 
   async initSchema(): Promise<void> {
-    const schema = `
-      -- Users table
-      CREATE TABLE IF NOT EXISTS users (
-        id TEXT PRIMARY KEY,
-        username TEXT NOT NULL UNIQUE,
-        display_name TEXT NOT NULL,
-        password_hash TEXT NOT NULL,
-        role TEXT NOT NULL DEFAULT 'user',
-        mcp_api_key TEXT NOT NULL,
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
-      );
+    if (!this.schemaInitialization) {
+      this.schemaInitialization = this.initSchemaInternal().catch(error => {
+        this.schemaInitialization = undefined;
+        throw error;
+      });
+    }
+    return this.schemaInitialization;
+  }
 
-      -- OAuth clients table
-      CREATE TABLE IF NOT EXISTS oauth_clients (
-        id TEXT PRIMARY KEY,
-        owner_id TEXT NOT NULL,
-        provider TEXT NOT NULL,
-        label TEXT NOT NULL,
-        client_id TEXT NOT NULL,
-        client_secret TEXT NOT NULL,
-        scopes_json TEXT NOT NULL,
-        tenant_id TEXT,
-        accounts_server TEXT,
-        client_type TEXT,
-        enabled INTEGER NOT NULL DEFAULT 1,
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL,
-        FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE CASCADE
-      );
-
-      -- Accounts table
-      CREATE TABLE IF NOT EXISTS accounts (
-        id TEXT PRIMARY KEY,
-        owner_id TEXT NOT NULL,
-        provider TEXT NOT NULL,
-        name TEXT NOT NULL,
-        slug TEXT NOT NULL,
-        email TEXT NOT NULL,
-        display_name TEXT,
-        credentials_json TEXT NOT NULL,
-        status TEXT DEFAULT 'active',
-        health TEXT DEFAULT 'unknown',
-        last_sync_at INTEGER,
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL,
-        FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE CASCADE
-      );
-
-      -- Sync state table
-      CREATE TABLE IF NOT EXISTS sync_state (
-        account_id TEXT PRIMARY KEY,
-        mail_cursor TEXT,
-        contacts_cursor TEXT,
-        calendar_cursor TEXT,
-        last_full_sync INTEGER,
-        updated_at INTEGER NOT NULL,
-        FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
-      );
-
-      -- Settings table
-      CREATE TABLE IF NOT EXISTS settings (
-        key TEXT PRIMARY KEY,
-        value TEXT NOT NULL,
-        updated_at INTEGER NOT NULL
-      );
-
-      -- OAuth state table (temporary)
-      CREATE TABLE IF NOT EXISTS oauth_states (
-        state TEXT PRIMARY KEY,
-        data_json TEXT NOT NULL,
-        created_at INTEGER NOT NULL
-      );
-
-      -- Mail messages table (cached metadata)
-      CREATE TABLE IF NOT EXISTS mail_messages (
-        id TEXT PRIMARY KEY,
-        account_id TEXT NOT NULL,
-        folder_id TEXT NOT NULL,
-        thread_id TEXT,
-        from_addr TEXT NOT NULL,
-        to_addrs TEXT NOT NULL,
-        cc_addrs TEXT NOT NULL,
-        bcc_addrs TEXT NOT NULL,
-        subject TEXT,
-        snippet TEXT,
-        body TEXT,
-        html_body TEXT,
-        date INTEGER NOT NULL,
-        unread INTEGER NOT NULL DEFAULT 0,
-        starred INTEGER NOT NULL DEFAULT 0,
-        labels_or_folders TEXT NOT NULL,
-        attachments TEXT,
-        headers TEXT,
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL,
-        FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
-      );
-
-      -- Mail folders table
-      CREATE TABLE IF NOT EXISTS mail_folders (
-        id TEXT PRIMARY KEY,
-        account_id TEXT NOT NULL,
-        name TEXT NOT NULL,
-        parent_id TEXT,
-        type TEXT NOT NULL,
-        unread_count INTEGER DEFAULT 0,
-        total_count INTEGER DEFAULT 0,
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL,
-        FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
-      );
-
-      -- Calendar events table
-      CREATE TABLE IF NOT EXISTS calendar_events (
-        id TEXT PRIMARY KEY,
-        account_id TEXT NOT NULL,
-        calendar_id TEXT NOT NULL,
-        summary TEXT,
-        description TEXT,
-        location TEXT,
-        start_at INTEGER NOT NULL,
-        end_at INTEGER NOT NULL,
-        all_day INTEGER NOT NULL DEFAULT 0,
-        status TEXT,
-        attendees TEXT,
-        recurrence_rule TEXT,
-        raw TEXT,
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL,
-        FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE,
-        UNIQUE(account_id, calendar_id, id)
-      );
-
-      -- Calendars table
-      CREATE TABLE IF NOT EXISTS calendars (
-        id TEXT PRIMARY KEY,
-        account_id TEXT NOT NULL,
-        external_id TEXT,
-        name TEXT NOT NULL,
-        description TEXT,
-        color TEXT,
-        primary_calendar INTEGER NOT NULL DEFAULT 0,
-        access_role TEXT,
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL,
-        FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE,
-        UNIQUE(account_id, external_id)
-      );
-
-      -- Contacts table
-      CREATE TABLE IF NOT EXISTS contacts (
-        id TEXT PRIMARY KEY,
-        account_id TEXT NOT NULL,
-        external_id TEXT,
-        display_name TEXT NOT NULL,
-        emails TEXT NOT NULL,
-        phones TEXT,
-        addresses TEXT,
-        organization TEXT,
-        job_title TEXT,
-        notes TEXT,
-        raw TEXT,
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL,
-        FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE,
-        UNIQUE(account_id, external_id)
-      );
-
-      -- Indexes
-      CREATE INDEX IF NOT EXISTS idx_mail_account_folder ON mail_messages(account_id, folder_id);
-      CREATE INDEX IF NOT EXISTS idx_mail_date ON mail_messages(account_id, date DESC);
-      CREATE INDEX IF NOT EXISTS idx_mail_unread ON mail_messages(account_id, unread, date DESC);
-      CREATE INDEX IF NOT EXISTS idx_contacts_account ON contacts(account_id);
-      CREATE INDEX IF NOT EXISTS idx_events_account_range ON calendar_events(account_id, start_at, end_at);
-      CREATE INDEX IF NOT EXISTS idx_calendars_account ON calendars(account_id);
-    `;
-
-    // Split schema into individual clean statements, stripping comments and formatting newlines
-    const noComments = schema
-      .split('\n')
-      .map(line => line.trim())
-      .filter(line => !line.startsWith('--'))
-      .join('\n');
-
-    const statements = noComments
-      .split(';')
-      .map(stmt => stmt.trim())
-      .filter(stmt => stmt.length > 0);
-
-    for (const stmt of statements) {
+  private async initSchemaInternal(): Promise<void> {
+    await this.schemaQuery(MIGRATION_LEDGER_SQL);
+    const applied = (await this.schemaQuery<{ version: number }>(READ_MIGRATIONS_SQL, [], true)).results;
+    for (const migration of SCHEMA_MIGRATIONS) {
+      if (applied.some(row => row.version === migration.version)) continue;
       try {
-        await this.db.prepare(stmt).run();
-      } catch (err: any) {
-        // If the error is because a table already exists, we can ignore it
-        if (!err.message?.includes('already exists')) {
-          throw err;
+        for (const sql of migration.statements?.('d1') || []) await this.schemaQuery(sql);
+        for (const column of migrationColumns(migration, 'd1')) {
+          await this.ensureColumn(column.table, column.name, column.definition);
         }
+        // D1/HTTP does not support interactive transactions. All operations are
+        // additive and retryable; never mark a partially completed version applied.
+        await this.schemaQuery(RECORD_MIGRATION_SQL, [migration.version, migration.name, Date.now()]);
+      } catch (error) {
+        throw new Error(`D1 schema migration ${migration.version} (${migration.name}) failed`, { cause: error });
       }
     }
-
-    // --- Schema migrations: add columns that may be missing from DBs created by older versions ---
-    await this.ensureColumn('oauth_clients', 'client_platform', 'TEXT');
-    await this.ensureColumn('oauth_clients', 'client_type', 'TEXT');
-    await this.ensureColumn('accounts', 'display_name', 'TEXT');
-    await this.ensureColumn('accounts', 'health', 'TEXT');
-    await this.ensureColumn('accounts', 'last_sync_at', 'INTEGER');
   }
 
   private async ensureColumn(table: string, column: string, definition: string): Promise<void> {
-    try {
-      const cols = (await this.db.prepare(`PRAGMA table_info(${table})`).all()).results as any[];
-      if (!cols.some((col: any) => col.name === column)) {
-        await this.db.prepare(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`).run();
-      }
-    } catch (err: any) {
-      console.warn(`[mcp-ecc] Schema migration skipped (${table}.${column}):`, err.message);
+    const columns = (await this.schemaQuery<{ name: string }>(`PRAGMA table_info(${table})`, [], true)).results;
+    if (!columns.some(existing => existing.name === column)) {
+      await this.schemaQuery(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
     }
+  }
+
+  private async schemaQuery<T = unknown>(sql: string, params: unknown[] = [], read = false): Promise<D1Result<T>> {
+    const statement = this.db.prepare(sql).bind(...params);
+    const result = read ? await statement.all<T>() : await statement.run();
+    if (!result.success) throw new Error('D1 schema query returned success=false');
+    return result as D1Result<T>;
   }
 
   private async encrypt(data: string): Promise<string> {
