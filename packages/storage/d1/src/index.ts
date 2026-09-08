@@ -14,6 +14,8 @@ import type {
   User,
 } from '@mcp-ecc/core';
 import { generateId } from '@mcp-ecc/core';
+import { SCHEMA_MIGRATIONS, MIGRATION_LEDGER_SQL, READ_MIGRATIONS_SQL, RECORD_MIGRATION_SQL, migrationColumns } from '@mcp-ecc/core';
+import CryptoJS from 'crypto-js';
 
 export interface D1Database {
   prepare(query: string): D1PreparedStatement;
@@ -39,257 +41,203 @@ export interface D1Result<T = unknown> {
   };
 }
 
+export class CloudflareD1Database implements D1Database {
+  private accountId: string;
+  private databaseId: string;
+  private apiToken: string;
+
+  constructor(accountId: string, databaseId: string, apiToken: string) {
+    this.accountId = accountId;
+    this.databaseId = databaseId;
+    this.apiToken = apiToken;
+  }
+
+  prepare(query: string): D1PreparedStatement {
+    return new CloudflareD1PreparedStatement(this, query);
+  }
+
+  async exec(query: string): Promise<void> {
+    await this.runQuery(query, []);
+  }
+
+  async batch(statements: D1PreparedStatement[]): Promise<D1Result[]> {
+    const payloads = statements.map(stmt => ({
+      sql: (stmt as CloudflareD1PreparedStatement).getQuery(),
+      params: (stmt as CloudflareD1PreparedStatement).getParams(),
+    }));
+    return this.runBatch(payloads);
+  }
+
+  async runQuery(sql: string, params: unknown[]): Promise<D1Result> {
+    const url = `https://api.cloudflare.com/client/v4/accounts/${this.accountId}/d1/database/${this.databaseId}/query`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${this.apiToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ sql, params }),
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`Cloudflare D1 Query Error (${response.status}): ${errText}`);
+    }
+
+    const data: any = await response.json();
+    if (!data.success) {
+      throw new Error(`Cloudflare D1 Query Failed: ${JSON.stringify(data.errors)}`);
+    }
+
+    const res = data.result[0];
+    return {
+      results: res.results || [],
+      success: res.success,
+      meta: res.meta || { changes: 0, duration: 0, last_row_id: 0, changed_db: false },
+    };
+  }
+
+  async runBatch(payloads: { sql: string; params: unknown[] }[]): Promise<D1Result[]> {
+    const url = `https://api.cloudflare.com/client/v4/accounts/${this.accountId}/d1/database/${this.databaseId}/query`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${this.apiToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payloads),
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`Cloudflare D1 Batch Error (${response.status}): ${errText}`);
+    }
+
+    const data: any = await response.json();
+    if (!data.success) {
+      throw new Error(`Cloudflare D1 Batch Failed: ${JSON.stringify(data.errors)}`);
+    }
+
+    return data.result.map((res: any) => ({
+      results: res.results || [],
+      success: res.success,
+      meta: res.meta || { changes: 0, duration: 0, last_row_id: 0, changed_db: false },
+    }));
+  }
+}
+
+class CloudflareD1PreparedStatement implements D1PreparedStatement {
+  private db: CloudflareD1Database;
+  private sql: string;
+  private params: unknown[] = [];
+
+  constructor(db: CloudflareD1Database, sql: string) {
+    this.db = db;
+    this.sql = sql;
+  }
+
+  getQuery(): string {
+    return this.sql;
+  }
+
+  getParams(): unknown[] {
+    return this.params;
+  }
+
+  bind(...values: unknown[]): D1PreparedStatement {
+    const stmt = new CloudflareD1PreparedStatement(this.db, this.sql);
+    stmt.params = values;
+    return stmt;
+  }
+
+  async first<T = unknown>(colName?: string): Promise<T | null> {
+    const res = await this.db.runQuery(this.sql, this.params);
+    if (!res.results || res.results.length === 0) {
+      return null;
+    }
+    const row = res.results[0] as any;
+    if (colName) {
+      return row[colName] ?? null;
+    }
+    return row as T;
+  }
+
+  async all<T = unknown>(): Promise<D1Result<T>> {
+    const res = await this.db.runQuery(this.sql, this.params);
+    return res as D1Result<T>;
+  }
+
+  async run(): Promise<D1Result> {
+    return this.db.runQuery(this.sql, this.params);
+  }
+}
+
 export class D1Storage implements StorageAdapter {
   private db: D1Database;
-  private encryptionKey: Promise<CryptoKey> | CryptoKey;
+  private encryptionKey: string;
+  private schemaInitialization?: Promise<void>;
 
   constructor(db: D1Database, encryptionKey?: string) {
     this.db = db;
-    // In Workers, we'd use Web Crypto API
-    // For now, store the key material - actual encryption would use subtle crypto
-    this.encryptionKey = encryptionKey ? 
-      crypto.subtle.importKey('raw', new TextEncoder().encode(encryptionKey), 'AES-GCM', false, ['encrypt', 'decrypt']) :
-      this.generateKey();
-  }
-
-  private async getEncryptionKey(): Promise<CryptoKey> {
-    if (this.encryptionKey instanceof Promise) {
-      this.encryptionKey = await this.encryptionKey;
-    }
-    return this.encryptionKey;
-  }
-
-  private async generateKey(): Promise<CryptoKey> {
-    return crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']);
+    this.encryptionKey = encryptionKey || 'default-secret-key';
   }
 
   async initSchema(): Promise<void> {
-    const schema = `
-      -- Users table
-      CREATE TABLE IF NOT EXISTS users (
-        id TEXT PRIMARY KEY,
-        username TEXT NOT NULL UNIQUE,
-        display_name TEXT NOT NULL,
-        password_hash TEXT NOT NULL,
-        role TEXT NOT NULL DEFAULT 'user',
-        mcp_api_key TEXT NOT NULL,
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
-      );
+    if (!this.schemaInitialization) {
+      this.schemaInitialization = this.initSchemaInternal().catch(error => {
+        this.schemaInitialization = undefined;
+        throw error;
+      });
+    }
+    return this.schemaInitialization;
+  }
 
-      -- OAuth clients table
-      CREATE TABLE IF NOT EXISTS oauth_clients (
-        id TEXT PRIMARY KEY,
-        owner_id TEXT NOT NULL,
-        provider TEXT NOT NULL,
-        label TEXT NOT NULL,
-        client_id TEXT NOT NULL,
-        client_secret TEXT NOT NULL,
-        scopes_json TEXT NOT NULL,
-        tenant_id TEXT,
-        accounts_server TEXT,
-        client_type TEXT,
-        enabled INTEGER NOT NULL DEFAULT 1,
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL,
-        FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE CASCADE
-      );
-
-      -- Accounts table
-      CREATE TABLE IF NOT EXISTS accounts (
-        id TEXT PRIMARY KEY,
-        owner_id TEXT NOT NULL,
-        provider TEXT NOT NULL,
-        name TEXT NOT NULL,
-        slug TEXT NOT NULL,
-        email TEXT NOT NULL,
-        display_name TEXT,
-        credentials_json TEXT NOT NULL,
-        status TEXT DEFAULT 'active',
-        health TEXT DEFAULT 'unknown',
-        last_sync_at INTEGER,
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL,
-        FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE CASCADE
-      );
-
-      -- Sync state table
-      CREATE TABLE IF NOT EXISTS sync_state (
-        account_id TEXT PRIMARY KEY,
-        mail_cursor TEXT,
-        contacts_cursor TEXT,
-        calendar_cursor TEXT,
-        last_full_sync INTEGER,
-        updated_at INTEGER NOT NULL,
-        FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
-      );
-
-      -- Settings table
-      CREATE TABLE IF NOT EXISTS settings (
-        key TEXT PRIMARY KEY,
-        value TEXT NOT NULL,
-        updated_at INTEGER NOT NULL
-      );
-
-      -- OAuth state table (temporary)
-      CREATE TABLE IF NOT EXISTS oauth_states (
-        state TEXT PRIMARY KEY,
-        data_json TEXT NOT NULL,
-        created_at INTEGER NOT NULL
-      );
-
-      -- Mail messages table (cached metadata)
-      CREATE TABLE IF NOT EXISTS mail_messages (
-        id TEXT PRIMARY KEY,
-        account_id TEXT NOT NULL,
-        folder_id TEXT NOT NULL,
-        thread_id TEXT,
-        from_addr TEXT NOT NULL,
-        to_addrs TEXT NOT NULL,
-        cc_addrs TEXT NOT NULL,
-        bcc_addrs TEXT NOT NULL,
-        subject TEXT,
-        snippet TEXT,
-        body TEXT,
-        html_body TEXT,
-        date INTEGER NOT NULL,
-        unread INTEGER NOT NULL DEFAULT 0,
-        starred INTEGER NOT NULL DEFAULT 0,
-        labels_or_folders TEXT NOT NULL,
-        attachments TEXT,
-        headers TEXT,
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL,
-        FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
-      );
-
-      -- Mail folders table
-      CREATE TABLE IF NOT EXISTS mail_folders (
-        id TEXT PRIMARY KEY,
-        account_id TEXT NOT NULL,
-        name TEXT NOT NULL,
-        parent_id TEXT,
-        type TEXT NOT NULL,
-        unread_count INTEGER DEFAULT 0,
-        total_count INTEGER DEFAULT 0,
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL,
-        FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
-      );
-
-      -- Calendar events table
-      CREATE TABLE IF NOT EXISTS calendar_events (
-        id TEXT PRIMARY KEY,
-        account_id TEXT NOT NULL,
-        calendar_id TEXT NOT NULL,
-        summary TEXT,
-        description TEXT,
-        location TEXT,
-        start_at INTEGER NOT NULL,
-        end_at INTEGER NOT NULL,
-        all_day INTEGER NOT NULL DEFAULT 0,
-        status TEXT,
-        attendees TEXT,
-        recurrence_rule TEXT,
-        raw TEXT,
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL,
-        FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE,
-        UNIQUE(account_id, calendar_id, id)
-      );
-
-      -- Calendars table
-      CREATE TABLE IF NOT EXISTS calendars (
-        id TEXT PRIMARY KEY,
-        account_id TEXT NOT NULL,
-        external_id TEXT,
-        name TEXT NOT NULL,
-        description TEXT,
-        color TEXT,
-        primary_calendar INTEGER NOT NULL DEFAULT 0,
-        access_role TEXT,
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL,
-        FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE,
-        UNIQUE(account_id, external_id)
-      );
-
-      -- Contacts table
-      CREATE TABLE IF NOT EXISTS contacts (
-        id TEXT PRIMARY KEY,
-        account_id TEXT NOT NULL,
-        external_id TEXT,
-        display_name TEXT NOT NULL,
-        emails TEXT NOT NULL,
-        phones TEXT,
-        addresses TEXT,
-        organization TEXT,
-        job_title TEXT,
-        notes TEXT,
-        raw TEXT,
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL,
-        FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE,
-        UNIQUE(account_id, external_id)
-      );
-
-      -- Indexes
-      CREATE INDEX IF NOT EXISTS idx_mail_account_folder ON mail_messages(account_id, folder_id);
-      CREATE INDEX IF NOT EXISTS idx_mail_date ON mail_messages(account_id, date DESC);
-      CREATE INDEX IF NOT EXISTS idx_mail_unread ON mail_messages(account_id, unread, date DESC);
-      CREATE INDEX IF NOT EXISTS idx_contacts_account ON contacts(account_id);
-      CREATE INDEX IF NOT EXISTS idx_events_account_range ON calendar_events(account_id, start_at, end_at);
-      CREATE INDEX IF NOT EXISTS idx_calendars_account ON calendars(account_id);
-    `;
-
-    // Split schema into individual clean statements, stripping comments and formatting newlines
-    const noComments = schema
-      .split('\n')
-      .map(line => line.trim())
-      .filter(line => !line.startsWith('--'))
-      .join('\n');
-
-    const statements = noComments
-      .split(';')
-      .map(stmt => stmt.trim())
-      .filter(stmt => stmt.length > 0);
-
-    for (const stmt of statements) {
+  private async initSchemaInternal(): Promise<void> {
+    await this.schemaQuery(MIGRATION_LEDGER_SQL);
+    const applied = (await this.schemaQuery<{ version: number }>(READ_MIGRATIONS_SQL, [], true)).results;
+    for (const migration of SCHEMA_MIGRATIONS) {
+      if (applied.some(row => row.version === migration.version)) continue;
       try {
-        await this.db.prepare(stmt).run();
-      } catch (err: any) {
-        // If the error is because a table already exists, we can ignore it
-        if (!err.message?.includes('already exists')) {
-          throw err;
+        for (const sql of migration.statements?.('d1') || []) await this.schemaQuery(sql);
+        for (const column of migrationColumns(migration, 'd1')) {
+          await this.ensureColumn(column.table, column.name, column.definition);
         }
+        // D1/HTTP does not support interactive transactions. All operations are
+        // additive and retryable; never mark a partially completed version applied.
+        await this.schemaQuery(RECORD_MIGRATION_SQL, [migration.version, migration.name, Date.now()]);
+      } catch (error) {
+        throw new Error(`D1 schema migration ${migration.version} (${migration.name}) failed`, { cause: error });
       }
     }
   }
 
+  private async ensureColumn(table: string, column: string, definition: string): Promise<void> {
+    const columns = (await this.schemaQuery<{ name: string }>(`PRAGMA table_info(${table})`, [], true)).results;
+    if (!columns.some(existing => existing.name === column)) {
+      await this.schemaQuery(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+    }
+  }
+
+  private async schemaQuery<T = unknown>(sql: string, params: unknown[] = [], read = false): Promise<D1Result<T>> {
+    const statement = this.db.prepare(sql).bind(...params);
+    const result = read ? await statement.all<T>() : await statement.run();
+    if (!result.success) throw new Error('D1 schema query returned success=false');
+    return result as D1Result<T>;
+  }
+
   private async encrypt(data: string): Promise<string> {
-    const iv = crypto.getRandomValues(new Uint8Array(12));
-    const encoded = new TextEncoder().encode(data);
-    const encrypted = await crypto.subtle.encrypt(
-      { name: 'AES-GCM', iv },
-      await this.getEncryptionKey(),
-      encoded
-    );
-    const result = new Uint8Array(iv.length + encrypted.byteLength);
-    result.set(iv);
-    result.set(new Uint8Array(encrypted), iv.length);
-    return btoa(String.fromCharCode(...result));
+    return CryptoJS.AES.encrypt(data, this.encryptionKey).toString();
   }
 
   private async decrypt(encryptedData: string): Promise<string> {
-    const data = new Uint8Array(atob(encryptedData).split('').map(c => c.charCodeAt(0)));
-    const iv = data.slice(0, 12);
-    const encrypted = data.slice(12);
-    const decrypted = await crypto.subtle.decrypt(
-      { name: 'AES-GCM', iv },
-      await this.getEncryptionKey(),
-      encrypted
-    );
-    return new TextDecoder().decode(decrypted);
+    if (!encryptedData) return '';
+    try {
+      const bytes = CryptoJS.AES.decrypt(encryptedData, this.encryptionKey);
+      return bytes.toString(CryptoJS.enc.Utf8) || '';
+    } catch (e: any) {
+      console.warn('[mcp-ecc] Failed to decrypt D1 data asynchronously:', e.message);
+      return '';
+    }
   }
 
   // Account management
@@ -421,6 +369,7 @@ export class D1Storage implements StorageAdapter {
     for (const row of results as any[]) {
       if (row.key === 'encryptionKey') settings.encryptionKey = row.value;
       else if (row.key === 'uiPreferences') settings.uiPreferences = JSON.parse(row.value);
+      else if (row.key === 'sessions') (settings as any).sessions = JSON.parse(row.value);
       settings.updatedAt = Math.max(settings.updatedAt, row.updated_at);
     }
     return settings;
@@ -439,6 +388,13 @@ export class D1Storage implements StorageAdapter {
         INSERT INTO settings (key, value, updated_at) VALUES ('uiPreferences', ?, ?)
         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
       `).bind(JSON.stringify(settings.uiPreferences), now).run();
+    }
+    const sessions = (settings as any).sessions;
+    if (sessions) {
+      await this.db.prepare(`
+        INSERT INTO settings (key, value, updated_at) VALUES ('sessions', ?, ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+      `).bind(JSON.stringify(sessions), now).run();
     }
   }
 
@@ -696,27 +652,28 @@ export class D1Storage implements StorageAdapter {
     const now = Date.now();
     const secretJson = await this.encrypt(client.clientSecret);
     await this.db.prepare(`
-      INSERT INTO oauth_clients (id, owner_id, provider, label, client_id, client_secret, scopes_json, tenant_id, accounts_server, enabled, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO oauth_clients (id, owner_id, provider, label, client_id, client_secret, scopes_json, tenant_id, accounts_server, client_platform, client_type, enabled, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         owner_id = excluded.owner_id, provider = excluded.provider, label = excluded.label,
         client_id = excluded.client_id, client_secret = excluded.client_secret, scopes_json = excluded.scopes_json,
-        tenant_id = excluded.tenant_id, accounts_server = excluded.accounts_server, enabled = excluded.enabled,
+        tenant_id = excluded.tenant_id, accounts_server = excluded.accounts_server,
+        client_platform = excluded.client_platform, client_type = excluded.client_type, enabled = excluded.enabled,
         updated_at = excluded.updated_at
     `).bind(client.id, client.ownerId, client.provider, client.label, client.clientId, secretJson,
       JSON.stringify(client.scopes), client.tenantId || null, client.accountsServer || null,
-      client.enabled ? 1 : 0, now, now).run();
+      client.clientPlatform || null, client.clientType || null, client.enabled ? 1 : 0, now, now).run();
   }
 
   async getOAuthClient(id: string): Promise<OAuthClient | null> {
     const row = await this.db.prepare('SELECT * FROM oauth_clients WHERE id = ?').bind(id).first();
     if (!row) return null;
-    return this.mapOAuthClient(row as any);
+    return await this.mapOAuthClient(row as any);
   }
 
   async listOAuthClients(ownerId: string): Promise<OAuthClient[]> {
     const { results } = await this.db.prepare('SELECT * FROM oauth_clients WHERE owner_id = ? ORDER BY provider, label').bind(ownerId).all();
-    return (results as any[]).map(r => this.mapOAuthClient(r));
+    return await Promise.all((results as any[]).map(r => this.mapOAuthClient(r)));
   }
 
   async deleteOAuthClient(id: string): Promise<void> {
@@ -804,17 +761,39 @@ export class D1Storage implements StorageAdapter {
     };
   }
 
-  private mapOAuthClient(row: any): OAuthClient {
+  private async decryptWithLegacyFallback(encryptedData: string): Promise<string> {
+    const current = this.decryptSync(encryptedData);
+    if (current) return current;
+
+    // Older D1 builds used WebCrypto AES-GCM with SHA-256-derived key material.
+    // Read that format so existing OAuth secrets remain usable after upgrading.
+    try {
+      const bytes = Uint8Array.from(atob(encryptedData), c => c.charCodeAt(0));
+      const iv = bytes.slice(0, 12);
+      const ciphertext = bytes.slice(12);
+      const material = new TextEncoder().encode(this.encryptionKey);
+      const digest = await crypto.subtle.digest('SHA-256', material);
+      const key = await crypto.subtle.importKey('raw', digest, 'AES-GCM', false, ['decrypt']);
+      const plaintext = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext);
+      return new TextDecoder().decode(plaintext);
+    } catch {
+      return '';
+    }
+  }
+
+  private async mapOAuthClient(row: any): Promise<OAuthClient> {
     return {
       id: row.id,
       ownerId: row.owner_id,
       provider: row.provider,
       label: row.label,
       clientId: row.client_id,
-      clientSecret: this.decryptSync(row.client_secret),
+      clientSecret: await this.decryptWithLegacyFallback(row.client_secret),
       scopes: JSON.parse(row.scopes_json),
       tenantId: row.tenant_id || undefined,
       accountsServer: row.accounts_server || undefined,
+      clientPlatform: row.client_platform || undefined,
+      clientType: row.client_type || undefined,
       enabled: row.enabled === 1,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
@@ -835,12 +814,14 @@ export class D1Storage implements StorageAdapter {
   }
 
   private decryptSync(encryptedData: string): string {
-    // Synchronous version for mapping - would need async version in real use
-    const data = new Uint8Array(atob(encryptedData).split('').map(c => c.charCodeAt(0)));
-    const iv = data.slice(0, 12);
-    const encrypted = data.slice(12);
-    // Note: In real implementation, this would be async
-    return ''; // Placeholder
+    if (!encryptedData) return '';
+    try {
+      const bytes = CryptoJS.AES.decrypt(encryptedData, this.encryptionKey);
+      return bytes.toString(CryptoJS.enc.Utf8) || '';
+    } catch (e: any) {
+      console.warn('[mcp-ecc] Failed to decrypt D1 data synchronously:', e.message);
+      return '';
+    }
   }
 
   private mapMailMessage(row: any): EmailMessage {

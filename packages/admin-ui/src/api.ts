@@ -2,6 +2,7 @@ import type {
   Account,
   AccountCreateInput,
   AccountStatus,
+  ClientPlatform,
   Health,
   OAuthClient,
   ProviderName,
@@ -121,6 +122,10 @@ export interface TestConnectionResult {
 
 export interface ReauthResult {
   authorizeUrl?: string;
+  verificationUri?: string;
+  userCode?: string;
+  deviceCode?: string;
+  interval?: number;
   state?: string;
   message?: string;
 }
@@ -151,12 +156,16 @@ export interface OAuthClientInput {
   scopes: string[];
   tenantId?: string;
   accountsServer?: string;
+  clientPlatform?: ClientPlatform;
+  clientType?: 'public' | 'confidential';
 }
 
 export const oauthClientsApi = {
   list: () => get<{ clients: OAuthClient[] }>('/api/oauth-clients'),
   create: (input: OAuthClientInput) =>
     send<{ client: OAuthClient }>('/api/oauth-clients', 'POST', input),
+  update: (id: string, patch: Partial<OAuthClientInput>) =>
+    send<{ client: OAuthClient }>(`/api/oauth-clients/${id}`, 'PATCH', patch),
   remove: (id: string) => send<{ success: boolean }>(`/api/oauth-clients/${id}`, 'DELETE'),
 };
 

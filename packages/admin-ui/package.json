@@ -1,7 +1,7 @@
 {
   "name": "@mcp-ecc/admin-ui",
-  "version": "0.4.0-beta.1",
-  "description": "Admin web UI for the mcp-ecc MCP server",
+  "version": "0.4.0-beta.2",
+  "description": "Embedded admin web UI served by @mcp-ecc/management-api. Not published as a standalone package.",
   "private": true,
   "type": "module",
   "scripts": {

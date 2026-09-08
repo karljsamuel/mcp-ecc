@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0-beta.2] - 2026-09-08
+
+### Added
+- **Provider-aware OAuth flows** — Google uses desktop or web authorisation clients; Microsoft uses one Azure application with web authorisation in the UI and device flow in the CLI; Zoho supports web, desktop and limited-input clients.
+- **OAuth callback redirect** — browser authorisation now returns to the Accounts page with success or error feedback.
+- **Live account health checks** — provider connectivity is checked at startup, every five minutes, and on demand from Account Details.
+- **Schema migrations** — SQLite and D1 use a tracked, central schema manifest with versioned, idempotent migrations and legacy-column upgrades.
+- **Persistent sessions** — web sessions survive management API restarts for both SQLite and D1.
+- **Admin UI OAuth management** — platform-aware OAuth client CRUD, storage visibility, logo/favicon branding and protected login routing.
+
+### Fixed
+- D1 OAuth client secrets encrypted by the previous WebCrypto implementation can be recovered during migration and reauthentication.
+- Microsoft web authentication no longer incorrectly uses an undisplayed device-code flow.
+- Zoho browser callbacks now persist provider client metadata, including the regional accounts server.
+- Account test-connection no longer returns a missing route; it performs a real provider check and records health.
+- Login race conditions no longer overwrite a successful login with a stale unauthenticated probe.
+
 ## [0.4.0-beta.1] - 2026-09-01
 
 ### Added

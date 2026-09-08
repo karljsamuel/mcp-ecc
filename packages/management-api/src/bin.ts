@@ -14,24 +14,55 @@ const PUBLIC_URL = process.env.PUBLIC_URL || process.env.BASE_URL || `http://loc
 const SESSION_SECRET = process.env.SESSION_SECRET;
 const ENCRYPTION_KEY = process.env.MCP_ENCRYPTION_KEY;
 
-// Storage: SQLite or Memory fallback.
+// Storage: SQLite, D1.
 let storage;
 let storageName = 'sqlite';
+const DB_PROVIDER = process.env.MCP_DB_PROVIDER || process.env.DB_PROVIDER;
+
+if (!DB_PROVIDER) {
+  console.error('[mcp-ecc] Critical Error: MCP_DB_PROVIDER is not set. Please set MCP_DB_PROVIDER to either "sqlite" or "d1" in your environment.');
+  process.exit(1);
+}
+
+if (DB_PROVIDER !== 'sqlite' && DB_PROVIDER !== 'd1') {
+  console.error(`[mcp-ecc] Critical Error: Invalid MCP_DB_PROVIDER value: "${DB_PROVIDER}". Allowed values are "sqlite" or "d1".`);
+  process.exit(1);
+}
+
 try {
-  const { SQLiteStorage } = await import('@mcp-ecc/storage-sqlite');
-  const STORAGE_FILE = process.env.MCP_STORAGE_FILE || join(process.cwd(), 'data', 'mcp-ecc.db');
-  const dbDir = dirname(STORAGE_FILE);
-  if (!existsSync(dbDir)) {
-    mkdirSync(dbDir, { recursive: true });
-    console.log(`[mcp-ecc] Created database directory at ${dbDir}`);
+  if (DB_PROVIDER === 'd1') {
+    const { D1Storage, CloudflareD1Database } = await import('@mcp-ecc/storage-d1');
+    const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
+    const databaseId = process.env.CLOUDFLARE_DATABASE_ID;
+    const apiToken = process.env.CLOUDFLARE_API_TOKEN;
+    if (!accountId || !databaseId || !apiToken) {
+      throw new Error('D1 storage selected but CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_DATABASE_ID, or CLOUDFLARE_API_TOKEN is missing.');
+    }
+    const db = new CloudflareD1Database(accountId, databaseId, apiToken);
+    storage = new D1Storage(db, ENCRYPTION_KEY);
+    storageName = 'cloudflare-d1';
+    console.log(`[mcp-ecc] Cloudflare D1 storage initialized (DB: ${databaseId})`);
+    
+    // Automatically initialize schema on Cloudflare D1
+    await storage.initSchema();
+    console.log('[mcp-ecc] Cloudflare D1 schema verified and initialized.');
+  } else {
+    const STORAGE_FILE = process.env.MCP_STORAGE_FILE;
+    if (!STORAGE_FILE) {
+      throw new Error('sqlite provider selected but MCP_STORAGE_FILE is not set. Please configure the database file path.');
+    }
+    const { SQLiteStorage } = await import('@mcp-ecc/storage-sqlite');
+    const dbDir = dirname(STORAGE_FILE);
+    if (!existsSync(dbDir)) {
+      mkdirSync(dbDir, { recursive: true });
+      console.log(`[mcp-ecc] Created database directory at ${dbDir}`);
+    }
+    storage = new SQLiteStorage(STORAGE_FILE, ENCRYPTION_KEY);
+    console.log(`[mcp-ecc] SQLite storage initialized at ${STORAGE_FILE}`);
   }
-  storage = new SQLiteStorage(STORAGE_FILE, ENCRYPTION_KEY);
-  console.log(`[mcp-ecc] SQLite storage initialized at ${STORAGE_FILE}`);
 } catch (e: any) {
-  const { MemoryStorage } = await import('@mcp-ecc/storage-memory');
-  storage = new MemoryStorage();
-  storageName = 'memory';
-  console.warn(`SQLite storage unavailable (native module missing), falling back to in-memory: ${e.message}`);
+  console.error(`[mcp-ecc] Critical: Storage provider initialization failed: ${e.message}`);
+  process.exit(1);
 }
 
 // Bootstrap guidance: if no users exist, the web UI shows the create-admin screen.
