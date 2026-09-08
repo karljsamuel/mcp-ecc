@@ -9,7 +9,7 @@ on:
       version:
         description: 'Semver to publish (e.g. 0.4.0-beta.1)'
         required: true
-        default: '0.4.0-beta.2'
+        default: '0.5.0-beta.1'
       to_mcp_registry:
         description: 'Also publish to the MCP Registry (needs mcp-publisher)'
         required: false
