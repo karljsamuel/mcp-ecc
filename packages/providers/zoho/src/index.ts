@@ -418,14 +418,14 @@ export class ZohoProvider implements IMailProvider, ICalendarProvider, IContacts
       `https://contacts.zoho.com/api/v1/accounts/self/contacts/${contactId}`,
       {
         method: 'PUT',
-        body: JSON.stringify({
+        body: JSON.stringify({ contacts: {
           first_name: patches.displayName,
-          email: patches.emails?.map(e => e.email).join(','),
-          phone: patches.phones?.map(p => p.number).join(','),
+          emails: patches.emails?.map(e => ({ email_id: e.email, is_primary: e.primary === true })),
+          phones: patches.phones?.map(p => ({ number: p.number, type: p.type || 'mobile' })),
           company: patches.organization,
           job_title: patches.jobTitle,
           notes: patches.notes,
-        }),
+        }}),
       }
     );
     return this.mapContact(res.contact || res);

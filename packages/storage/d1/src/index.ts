@@ -61,11 +61,16 @@ export class CloudflareD1Database implements D1Database {
   }
 
   async batch(statements: D1PreparedStatement[]): Promise<D1Result[]> {
-    const payloads = statements.map(stmt => ({
-      sql: (stmt as CloudflareD1PreparedStatement).getQuery(),
-      params: (stmt as CloudflareD1PreparedStatement).getParams(),
-    }));
-    return this.runBatch(payloads);
+    // Cloudflare's public D1 query endpoint accepts one query object, not
+    // the Workers runtime's batch array payload. Execute sequentially.
+    const results: D1Result[] = [];
+    for (const stmt of statements) {
+      results.push(await this.runQuery(
+        (stmt as CloudflareD1PreparedStatement).getQuery(),
+        (stmt as CloudflareD1PreparedStatement).getParams(),
+      ));
+    }
+    return results;
   }
 
   async runQuery(sql: string, params: unknown[]): Promise<D1Result> {

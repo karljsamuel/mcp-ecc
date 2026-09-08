@@ -466,13 +466,15 @@ export class GoogleProvider implements IMailProvider, ICalendarProvider, IContac
       resourceName: contactId,
       updatePersonFields: 'names,emailAddresses,phoneNumbers,organizations,biographies',
       requestBody: {
-        names: patches.displayName ? [{ givenName: patches.displayName }] : current.emails.length > 0 ? [{ givenName: current.displayName }] : undefined,
+        etag: current.raw?.etag,
+        metadata: current.raw?.metadata,
+        names: patches.displayName ? [{ givenName: patches.displayName }] : current.displayName ? [{ givenName: current.displayName }] : undefined,
         emailAddresses: patches.emails?.map(e => ({ value: e.email, type: e.type || 'work' })),
         phoneNumbers: patches.phones?.map(p => ({ value: p.number, type: p.type || 'mobile' })),
         organizations: patches.organization ? [{ name: patches.organization, title: patches.jobTitle }] : undefined,
         biographies: patches.notes ? [{ value: patches.notes }] : undefined,
       },
-    });
+    } as any);
     return this.mapContact(res.data);
   }
 
