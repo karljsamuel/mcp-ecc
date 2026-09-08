@@ -44,6 +44,7 @@ export class ManagementApi {
   private authService: AuthService;
   private config: ManagementApiConfig;
   private publicUrl: string;
+  private healthTimer?: ReturnType<typeof setInterval>;
 
   constructor(config: ManagementApiConfig) {
     this.config = config;
@@ -72,6 +73,62 @@ export class ManagementApi {
     this.app.register(cookies, { secret });
     // Serve the admin UI (SPA). Guard against a missing build dir.
     this.app.register(staticFiles, { root: this.config.publicDir, prefix: '/' });
+  }
+
+  private async refreshAccountHealth(): Promise<void> {
+    const accounts = await this.storage.listAccounts();
+    for (const account of accounts) {
+      try {
+        await this.checkAccountConnection(account);
+        await this.storage.updateAccount(account.id, { health: 'healthy', status: 'active' });
+      } catch {
+        await this.storage.updateAccount(account.id, { health: 'unhealthy' });
+      }
+    }
+  }
+
+  private async checkAccountConnection(account: any): Promise<string> {
+    const credentials = account.credentials || {};
+    switch (account.provider) {
+      case 'google': {
+        const { GoogleProvider } = await import('@mcp-ecc/provider-google');
+        const provider = new GoogleProvider(account.id, credentials);
+        await provider.listFolders();
+        return 'Google Gmail connection succeeded.';
+      }
+      case 'microsoft': {
+        const { MicrosoftProvider } = await import('@mcp-ecc/provider-microsoft');
+        const provider = new MicrosoftProvider(account.id, credentials);
+        await provider.listFolders();
+        return 'Microsoft Graph connection succeeded.';
+      }
+      case 'zoho': {
+        const { ZohoProvider } = await import('@mcp-ecc/provider-zoho');
+        const provider = new ZohoProvider(account.id, credentials);
+        await provider.listFolders();
+        return 'Zoho Mail connection succeeded.';
+      }
+      case 'imap': {
+        const { ImapSmtpProvider } = await import('@mcp-ecc/provider-imap-smtp');
+        const provider = new ImapSmtpProvider(account.id, credentials);
+        await provider.listFolders();
+        return 'IMAP connection succeeded.';
+      }
+      case 'caldav': {
+        const { CalDAVProvider } = await import('@mcp-ecc/provider-caldav');
+        const provider = new CalDAVProvider(account.id, credentials);
+        await provider.listCalendars();
+        return 'CalDAV connection succeeded.';
+      }
+      case 'carddav': {
+        const { CardDAVProvider } = await import('@mcp-ecc/provider-carddav');
+        const provider = new CardDAVProvider(account.id, credentials);
+        await provider.listContacts({ limit: 1 });
+        return 'CardDAV connection succeeded.';
+      }
+      default:
+        throw new Error(`Unsupported provider: ${account.provider}`);
+    }
   }
 
   private setupRoutes(): void {
@@ -281,10 +338,14 @@ export class ManagementApi {
     this.app.post('/api/accounts/:id/test-connection', async (request: any, reply: any) => {
       const account = await this.storage.getAccount(request.params.id);
       if (!account || account.ownerId !== request.user.id) return reply.code(404).send({ error: 'Account not found' });
-      const credentials: any = account.credentials || {};
-      const authenticated = Boolean(credentials.accessToken || credentials.refreshToken || credentials.appPassword);
-      if (!authenticated) return { ok: false, message: 'Account has no stored credentials. Authenticate or reauthenticate it first.' };
-      return { ok: true, message: `Stored credentials are present for ${account.provider}.` };
+      try {
+        const message = await this.checkAccountConnection(account);
+        await this.storage.updateAccount(account.id, { health: 'healthy', status: 'active' });
+        return { ok: true, message, checkedAt: Date.now() };
+      } catch (error: any) {
+        await this.storage.updateAccount(account.id, { health: 'unhealthy' });
+        return { ok: false, message: error?.message || 'Provider connection failed', checkedAt: Date.now() };
+      }
     });
 
     this.app.patch('/api/accounts/:id', async (request: any, reply: any) => {
@@ -592,10 +653,15 @@ this.app.get('/api/users', async (request: any, reply: any) => {
 
   async start(): Promise<void> {
     await this.app.listen({ port: this.config.port, host: this.config.host });
+    // Check persisted accounts once at startup and periodically thereafter.
+    void this.refreshAccountHealth();
+    this.healthTimer = setInterval(() => void this.refreshAccountHealth(), 5 * 60 * 1000);
+    this.healthTimer.unref?.();
     console.log(`mcp-ecc management API listening on http://${this.config.host}:${this.config.port}`);
   }
 
   async stop(): Promise<void> {
+    if (this.healthTimer) clearInterval(this.healthTimer);
     await this.app.close();
   }
 
