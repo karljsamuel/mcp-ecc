@@ -75,6 +75,9 @@ export class SQLiteStorage implements StorageAdapter {
     if (!cols.some((c: any) => c.name === 'clientType')) {
       this.db.exec(`ALTER TABLE oauth_clients ADD COLUMN clientType TEXT`);
     }
+    if (!cols.some((c: any) => c.name === 'clientPlatform')) {
+      this.db.exec(`ALTER TABLE oauth_clients ADD COLUMN clientPlatform TEXT`);
+    }
   }
 
   private encrypt(text: string): string {
@@ -172,8 +175,8 @@ export class SQLiteStorage implements StorageAdapter {
   async saveOAuthClient(client: OAuthClient): Promise<void> {
     const encSecret = this.encrypt(client.clientSecret);
     const stmt = this.db.prepare(`
-      INSERT OR REPLACE INTO oauth_clients (id, ownerId, provider, label, clientId, clientSecret, scopes, tenantId, accountsServer, clientType, enabled, createdAt, updatedAt)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT OR REPLACE INTO oauth_clients (id, ownerId, provider, label, clientId, clientSecret, scopes, tenantId, accountsServer, clientPlatform, clientType, enabled, createdAt, updatedAt)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     stmt.run(
       client.id,
@@ -185,6 +188,7 @@ export class SQLiteStorage implements StorageAdapter {
       JSON.stringify(client.scopes),
       client.tenantId || null,
       client.accountsServer || null,
+      client.clientPlatform || null,
       client.clientType || null,
       client.enabled ? 1 : 0,
       client.createdAt,
@@ -227,6 +231,7 @@ export class SQLiteStorage implements StorageAdapter {
       scopes,
       tenantId: row.tenantId || undefined,
       accountsServer: row.accountsServer || undefined,
+      clientPlatform: row.clientPlatform || undefined,
       clientType: row.clientType || undefined,
       enabled: row.enabled === 1,
       createdAt: row.createdAt,

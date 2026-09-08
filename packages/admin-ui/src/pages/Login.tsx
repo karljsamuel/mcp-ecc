@@ -37,14 +37,14 @@ export function Login({ push }: { push: ToastPush }) {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-100 p-4">
+    <div className="flex min-h-screen flex-col items-center justify-center bg-slate-100 p-4">
+      <div className="mb-6 w-full max-w-md">
+        <img src="/Logo.png" alt="mcp-ecc" className="mx-auto w-3/4 object-contain" />
+      </div>
       <div className="card w-full max-w-md p-8">
-        <div className="mb-6 flex items-center gap-3">
-          <img src="/Logo.png" alt="mcp-ecc" className="h-11 w-11 object-contain" />
-          <div>
-            <h1 className="text-xl font-semibold text-slate-900">mcp-ecc Admin</h1>
-            <p className="text-sm text-slate-500">Sign in to manage your accounts</p>
-          </div>
+        <div className="mb-6 text-center">
+          <h1 className="text-xl font-semibold text-slate-900">mcp-ecc Admin</h1>
+          <p className="text-sm text-slate-500">Sign in to manage your accounts</p>
         </div>
 
         {error && (

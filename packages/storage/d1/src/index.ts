@@ -381,6 +381,24 @@ export class D1Storage implements StorageAdapter {
         }
       }
     }
+
+    // --- Schema migrations: add columns that may be missing from DBs created by older versions ---
+    await this.ensureColumn('oauth_clients', 'client_platform', 'TEXT');
+    await this.ensureColumn('oauth_clients', 'client_type', 'TEXT');
+    await this.ensureColumn('accounts', 'display_name', 'TEXT');
+    await this.ensureColumn('accounts', 'health', 'TEXT');
+    await this.ensureColumn('accounts', 'last_sync_at', 'INTEGER');
+  }
+
+  private async ensureColumn(table: string, column: string, definition: string): Promise<void> {
+    try {
+      const cols = (await this.db.prepare(`PRAGMA table_info(${table})`).all()).results as any[];
+      if (!cols.some((col: any) => col.name === column)) {
+        await this.db.prepare(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`).run();
+      }
+    } catch (err: any) {
+      console.warn(`[mcp-ecc] Schema migration skipped (${table}.${column}):`, err.message);
+    }
   }
 
   private async encrypt(data: string): Promise<string> {
@@ -809,16 +827,17 @@ export class D1Storage implements StorageAdapter {
     const now = Date.now();
     const secretJson = await this.encrypt(client.clientSecret);
     await this.db.prepare(`
-      INSERT INTO oauth_clients (id, owner_id, provider, label, client_id, client_secret, scopes_json, tenant_id, accounts_server, enabled, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO oauth_clients (id, owner_id, provider, label, client_id, client_secret, scopes_json, tenant_id, accounts_server, client_platform, client_type, enabled, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         owner_id = excluded.owner_id, provider = excluded.provider, label = excluded.label,
         client_id = excluded.client_id, client_secret = excluded.client_secret, scopes_json = excluded.scopes_json,
-        tenant_id = excluded.tenant_id, accounts_server = excluded.accounts_server, enabled = excluded.enabled,
+        tenant_id = excluded.tenant_id, accounts_server = excluded.accounts_server,
+        client_platform = excluded.client_platform, client_type = excluded.client_type, enabled = excluded.enabled,
         updated_at = excluded.updated_at
     `).bind(client.id, client.ownerId, client.provider, client.label, client.clientId, secretJson,
       JSON.stringify(client.scopes), client.tenantId || null, client.accountsServer || null,
-      client.enabled ? 1 : 0, now, now).run();
+      client.clientPlatform || null, client.clientType || null, client.enabled ? 1 : 0, now, now).run();
   }
 
   async getOAuthClient(id: string): Promise<OAuthClient | null> {
@@ -928,6 +947,8 @@ export class D1Storage implements StorageAdapter {
       scopes: JSON.parse(row.scopes_json),
       tenantId: row.tenant_id || undefined,
       accountsServer: row.accounts_server || undefined,
+      clientPlatform: row.client_platform || undefined,
+      clientType: row.client_type || undefined,
       enabled: row.enabled === 1,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
