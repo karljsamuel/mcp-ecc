@@ -31,6 +31,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
   const location = useLocation();
   const initialCheckDone = useRef(false);
+  const authGeneration = useRef(0);
 
   const redirectToLogin = useCallback(() => {
     setUser(null);
@@ -48,14 +49,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [redirectToLogin]);
 
   const refresh = useCallback(async () => {
+    const checkGeneration = ++authGeneration.current;
     try {
       const { user: u } = await authApi.me();
+      if (checkGeneration !== authGeneration.current) return authGeneration.current ? user : null;
       setUser(u);
       setLoading(false);
       setNeedsBootstrap(false);
       initialCheckDone.current = true;
       return u;
     } catch {
+      if (checkGeneration !== authGeneration.current) return user;
       // Not logged in — check whether we need to bootstrap the first admin.
       try {
         const { needsBootstrap } = await infoApi.bootstrapStatus();
@@ -76,6 +80,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = useCallback(
     async (username: string, password: string) => {
+      ++authGeneration.current;
       const { user: u } = await authApi.login(username, password);
       setUser(u);
       setNeedsBootstrap(false);
