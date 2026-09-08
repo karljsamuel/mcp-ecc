@@ -296,7 +296,7 @@ export class ZohoProvider implements IMailProvider, ICalendarProvider, IContacts
     if (options.limit) params.set('limit', String(options.limit));
 
     const res = await this.fetchZoho<{ events: any[] }>(
-      `https://calendar.zoho.com/api/v1/calendars/${calendarId}/events?${params}`
+      `https://calendar.zoho.com/api/v1/calendars/${encodeURIComponent(calendarId)}/events?${params}`
     );
     
     return (res.events || []).map(evt => this.mapEvent(evt));
@@ -304,7 +304,7 @@ export class ZohoProvider implements IMailProvider, ICalendarProvider, IContacts
 
   async getEvent(calendarId: string, eventId: string): Promise<CalendarEvent> {
     const res = await this.fetchZoho<{ events?: any[]; event?: any }>(
-      `https://calendar.zoho.com/api/v1/calendars/${calendarId}/events/${eventId}`
+      `https://calendar.zoho.com/api/v1/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`
     );
     return this.mapEvent((res.events && res.events[0]) || res.event || res);
   }
@@ -324,14 +324,14 @@ export class ZohoProvider implements IMailProvider, ICalendarProvider, IContacts
       isallday: event.allDay === true,
       attendees: event.attendees?.map(a => ({ email: a.address, is_organizer: false })),
     };
-    const url = `https://calendar.zoho.com/api/v1/calendars/${calendarId}/events?eventdata=${encodeURIComponent(JSON.stringify(eventdata))}`;
+    const url = `https://calendar.zoho.com/api/v1/calendars/${encodeURIComponent(calendarId)}/events?eventdata=${encodeURIComponent(JSON.stringify(eventdata))}`;
     const res = await this.fetchZoho<{ events: any[] }>(url, { method: 'POST' });
     return this.mapEvent((res.events || [])[0] || res);
   }
 
   async updateEvent(calendarId: string, eventId: string, patches: UpdateEventInput): Promise<CalendarEvent> {
     const res = await this.fetchZoho<{ event: any }>(
-      `https://calendar.zoho.com/api/v1/calendars/${calendarId}/events/${eventId}`,
+      `https://calendar.zoho.com/api/v1/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`,
       {
         method: 'PUT',
         body: JSON.stringify({
