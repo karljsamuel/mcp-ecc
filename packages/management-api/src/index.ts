@@ -278,6 +278,15 @@ export class ManagementApi {
       return reply.code(201).send({ account: { id: account.id, slug: account.slug, name: account.name } });
     });
 
+    this.app.post('/api/accounts/:id/test-connection', async (request: any, reply: any) => {
+      const account = await this.storage.getAccount(request.params.id);
+      if (!account || account.ownerId !== request.user.id) return reply.code(404).send({ error: 'Account not found' });
+      const credentials: any = account.credentials || {};
+      const authenticated = Boolean(credentials.accessToken || credentials.refreshToken || credentials.appPassword);
+      if (!authenticated) return { ok: false, message: 'Account has no stored credentials. Authenticate or reauthenticate it first.' };
+      return { ok: true, message: `Stored credentials are present for ${account.provider}.` };
+    });
+
     this.app.patch('/api/accounts/:id', async (request: any, reply: any) => {
       const account = await this.storage.getAccount(request.params.id);
       if (!account || account.ownerId !== request.user.id) return reply.code(404).send({ error: 'Account not found' });
@@ -327,10 +336,18 @@ export class ManagementApi {
         return reply.code(400).send({ error: `No OAuth client available for ${account.provider}. Add one in OAuth Clients first.` });
       }
       const redirectUri = `${this.publicUrl}/oauth/callback`;
-      const flow = await this.oauthManager.startFlow(account.provider as ProviderName, 'device_code', OAuthManager.clientToConfig(client, redirectUri));
-      // Persist the chosen client on the account for later token refresh.
-      await this.storage.updateCredentials(account.id, { oauthClientId: client.id });
-      return { authorizeUrl: flow.verificationUri, verificationUri: flow.verificationUri, userCode: flow.userCode, deviceCode: flow.deviceCode, interval: flow.interval, state: flow.state, message: `Go to ${flow.verificationUri} and enter code: ${flow.userCode}` };
+      // Google cannot use device flow for Gmail/Calendar scopes. Web clients
+      // must use the browser authorisation-code flow; device-capable clients
+      // use device flow for Microsoft/Zoho.
+      const flowType = client.clientPlatform === 'web' || account.provider === 'google' ? 'authorization_code' : 'device_code';
+      try {
+        const flow = await this.oauthManager.startFlow(account.provider as ProviderName, flowType, OAuthManager.clientToConfig(client, redirectUri));
+        // Persist the chosen client on the account for later token refresh.
+        await this.storage.updateCredentials(account.id, { oauthClientId: client.id });
+        return { authorizeUrl: flow.verificationUri, verificationUri: flow.verificationUri, userCode: flow.userCode, deviceCode: flow.deviceCode, interval: flow.interval, state: flow.state, message: flowType === 'device_code' ? `Go to ${flow.verificationUri} and enter code: ${flow.userCode}` : 'Open the authorisation URL to complete reauthentication.' };
+      } catch (error: any) {
+        return reply.code(400).send({ error: error?.message || 'Unable to start reauthentication flow' });
+      }
     });
 
     // OAuth callback completes a flow and stores tokens on the pending account.
