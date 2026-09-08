@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="Logo.png" alt="mcp-ecc" width="300" height="120" />
+<img src="https://raw.githubusercontent.com/karljsamuel/mcp-ecc/main/Logo.png" alt="mcp-ecc" width="300" height="120" />
 
 # mcp-ecc
 
