@@ -7,17 +7,18 @@ import { ManagementApi } from './index.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+const env = (name: string): string | undefined => process.env[name]?.trim();
 
-const PORT = parseInt(process.env.PORT || '3001', 10);
-const HOST = process.env.HOST || '0.0.0.0';
-const PUBLIC_URL = process.env.PUBLIC_URL || process.env.BASE_URL || `http://localhost:${PORT}`;
-const SESSION_SECRET = process.env.SESSION_SECRET;
-const ENCRYPTION_KEY = process.env.MCP_ENCRYPTION_KEY;
+const PORT = parseInt(env('PORT') || '3001', 10);
+const HOST = env('HOST') || '0.0.0.0';
+const PUBLIC_URL = env('PUBLIC_URL') || env('BASE_URL') || `http://localhost:${PORT}`;
+const SESSION_SECRET = env('SESSION_SECRET');
+const ENCRYPTION_KEY = env('MCP_ENCRYPTION_KEY');
 
 // Storage: SQLite, D1.
 let storage;
 let storageName = 'sqlite';
-const DB_PROVIDER = process.env.MCP_DB_PROVIDER || process.env.DB_PROVIDER;
+const DB_PROVIDER = env('MCP_DB_PROVIDER') || env('DB_PROVIDER');
 
 if (!DB_PROVIDER) {
   console.error('[mcp-ecc] Critical Error: MCP_DB_PROVIDER is not set. Please set MCP_DB_PROVIDER to either "sqlite" or "d1" in your environment.');
@@ -32,9 +33,9 @@ if (DB_PROVIDER !== 'sqlite' && DB_PROVIDER !== 'd1') {
 try {
   if (DB_PROVIDER === 'd1') {
     const { D1Storage, CloudflareD1Database } = await import('@mcp-ecc/storage-d1');
-    const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
-    const databaseId = process.env.CLOUDFLARE_DATABASE_ID;
-    const apiToken = process.env.CLOUDFLARE_API_TOKEN;
+    const accountId = env('CLOUDFLARE_ACCOUNT_ID');
+    const databaseId = env('CLOUDFLARE_DATABASE_ID');
+    const apiToken = env('CLOUDFLARE_API_TOKEN');
     if (!accountId || !databaseId || !apiToken) {
       throw new Error('D1 storage selected but CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_DATABASE_ID, or CLOUDFLARE_API_TOKEN is missing.');
     }
@@ -47,7 +48,7 @@ try {
     await storage.initSchema();
     console.log('[mcp-ecc] Cloudflare D1 schema verified and initialized.');
   } else {
-    const STORAGE_FILE = process.env.MCP_STORAGE_FILE;
+    const STORAGE_FILE = env('MCP_STORAGE_FILE');
     if (!STORAGE_FILE) {
       throw new Error('sqlite provider selected but MCP_STORAGE_FILE is not set. Please configure the database file path.');
     }

@@ -11,8 +11,10 @@ import * as path from 'path';
 import { AuthService, OAuthManager, OAuthClient, ProviderName } from '@mcp-ecc/core';
 import { McpEccServer } from '@mcp-ecc/mcp-server';
 
-const ENCRYPTION_KEY = process.env.MCP_ENCRYPTION_KEY || 'default-secret-key';
-const DB_PROVIDER = process.env.MCP_DB_PROVIDER || process.env.DB_PROVIDER;
+const env = (name: string): string | undefined => process.env[name]?.trim();
+
+const ENCRYPTION_KEY = env('MCP_ENCRYPTION_KEY') || 'default-secret-key';
+const DB_PROVIDER = env('MCP_DB_PROVIDER') || env('DB_PROVIDER');
 
 if (!DB_PROVIDER) {
   console.error(chalk.red('[mcp-ecc] Critical Error: MCP_DB_PROVIDER is not set. Please set MCP_DB_PROVIDER to either "sqlite" or "d1" in your environment.'));
@@ -30,9 +32,9 @@ let dbDir = process.cwd();
 
 if (DB_PROVIDER === 'd1') {
   const { D1Storage, CloudflareD1Database } = await import('@mcp-ecc/storage-d1');
-  const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
-  const databaseId = process.env.CLOUDFLARE_DATABASE_ID;
-  const apiToken = process.env.CLOUDFLARE_API_TOKEN;
+  const accountId = env('CLOUDFLARE_ACCOUNT_ID');
+  const databaseId = env('CLOUDFLARE_DATABASE_ID');
+  const apiToken = env('CLOUDFLARE_API_TOKEN');
   if (!accountId || !databaseId || !apiToken) {
     console.error(chalk.red('Error: D1 storage selected but CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_DATABASE_ID, or CLOUDFLARE_API_TOKEN is missing.'));
     process.exit(1);
@@ -48,7 +50,7 @@ if (DB_PROVIDER === 'd1') {
   // Automatically initialize schema on Cloudflare D1
   await storage.initSchema();
 } else {
-  const STORAGE_FILE = process.env.MCP_STORAGE_FILE;
+  const STORAGE_FILE = env('MCP_STORAGE_FILE');
   if (!STORAGE_FILE) {
     console.error(chalk.red('[mcp-ecc] Critical Error: sqlite provider selected but MCP_STORAGE_FILE is not set. Please configure the database file path.'));
     process.exit(1);
