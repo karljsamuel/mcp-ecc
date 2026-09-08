@@ -430,6 +430,9 @@ export class ManagementApi {
             scope: tokens.scope,
             idToken: tokens.idToken,
             tokenType: tokens.tokenType,
+            clientId: oauthState.clientId,
+            clientSecret: oauthState.clientSecret,
+            config: { accountsServer: oauthState.accountsServer },
           } as any);
           await this.storage.updateAccount(oauthState.accountId, { status: 'active', health: 'unknown' });
         }
