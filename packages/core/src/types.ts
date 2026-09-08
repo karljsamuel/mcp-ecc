@@ -357,6 +357,7 @@ export interface OAuthStateData {
   clientSecret?: string;
   tenantId?: string;
   accountsServer?: string;
+  accountId?: string;
   createdAt: number;
 }
 

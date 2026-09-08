@@ -122,6 +122,10 @@ export interface TestConnectionResult {
 
 export interface ReauthResult {
   authorizeUrl?: string;
+  verificationUri?: string;
+  userCode?: string;
+  deviceCode?: string;
+  interval?: number;
   state?: string;
   message?: string;
 }

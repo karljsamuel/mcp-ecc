@@ -319,7 +319,8 @@ export class ManagementApi {
             }
           }
           const redirectUri = `${this.publicUrl}/oauth/callback`;
-          const flow = await this.oauthManager.startFlow(provider as ProviderName, 'device_code', OAuthManager.clientToConfig(oauthClient, redirectUri));
+          const flowType = provider === 'google' || provider === 'microsoft' || oauthClient.clientPlatform === 'web' ? 'authorization_code' : 'device_code';
+          const flow = await this.oauthManager.startFlow(provider as ProviderName, flowType, OAuthManager.clientToConfig(oauthClient, redirectUri), account.id);
           await this.storage.updateCredentials(account.id, { oauthClientId: oauthClient.id });
           return reply.code(201).send({
             account: { id: account.id, slug: account.slug, name: account.name },
@@ -327,7 +328,7 @@ export class ManagementApi {
             verificationUri: flow.verificationUri,
             userCode: flow.userCode,
             deviceCode: flow.deviceCode,
-            message: `Account created. Go to ${flow.verificationUri} and enter code: ${flow.userCode}`,
+            message: flowType === 'device_code' ? `Account created. Go to ${flow.verificationUri} and enter code: ${flow.userCode}` : 'Account created. Open the authorisation URL to complete setup.',
           });
         }
       }
@@ -383,7 +384,7 @@ export class ManagementApi {
       }
       if (client) {
         // Resolve sibling web client if available under same name
-        const sibling = (await this.storage.listOAuthClients(request.user.id)).find(c => 
+        const sibling = account.provider === 'microsoft' ? undefined : (await this.storage.listOAuthClients(request.user.id)).find(c =>
           c.provider === client!.provider &&
           c.label === client!.label &&
           c.clientPlatform === 'web' &&
@@ -403,9 +404,9 @@ export class ManagementApi {
       // Google cannot use device flow for Gmail/Calendar scopes. Web clients
       // must use the browser authorisation-code flow; device-capable clients
       // use device flow for Microsoft/Zoho.
-      const flowType = client.clientPlatform === 'web' || account.provider === 'google' ? 'authorization_code' : 'device_code';
+      const flowType = account.provider === 'google' || account.provider === 'microsoft' || client.clientPlatform === 'web' ? 'authorization_code' : 'device_code';
       try {
-        const flow = await this.oauthManager.startFlow(account.provider as ProviderName, flowType, OAuthManager.clientToConfig(client, redirectUri));
+        const flow = await this.oauthManager.startFlow(account.provider as ProviderName, flowType, OAuthManager.clientToConfig(client, redirectUri), account.id);
         // Persist the chosen client on the account for later token refresh.
         await this.storage.updateCredentials(account.id, { oauthClientId: client.id });
         return { authorizeUrl: flow.verificationUri, verificationUri: flow.verificationUri, userCode: flow.userCode, deviceCode: flow.deviceCode, interval: flow.interval, state: flow.state, message: flowType === 'device_code' ? `Go to ${flow.verificationUri} and enter code: ${flow.userCode}` : 'Open the authorisation URL to complete reauthentication.' };
@@ -418,7 +419,19 @@ export class ManagementApi {
     this.app.get('/oauth/callback', async (request: any) => {
       const { code, state } = request.query;
       if (!code || !state) return { error: 'Missing code or state' };
+      const oauthState = await this.storage.getOAuthState(String(state));
       const tokens = await this.oauthManager.completeFlow(String(state), String(code));
+      if (oauthState?.accountId) {
+        await this.storage.updateCredentials(oauthState.accountId, {
+          accessToken: tokens.accessToken,
+          refreshToken: tokens.refreshToken,
+          expiryDate: tokens.expiresAt,
+          scope: tokens.scope,
+          idToken: tokens.idToken,
+          tokenType: tokens.tokenType,
+        } as any);
+        await this.storage.updateAccount(oauthState.accountId, { status: 'active', health: 'unknown' });
+      }
       return { success: true, message: 'OAuth complete. Return to the app to finish linking.' };
     });
 

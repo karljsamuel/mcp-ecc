@@ -28,7 +28,8 @@ export class OAuthManager {
   async startFlow(
     provider: ProviderName,
     flowType: OAuthFlowType,
-    config: OAuthConfig
+    config: OAuthConfig,
+    accountId?: string
   ): Promise<DeviceCodeResponse & { state: string; codeVerifier: string }> {
     const state = crypto.randomUUID();
     const codeVerifier = this.generateCodeVerifier();
@@ -48,6 +49,7 @@ export class OAuthManager {
       clientSecret: resolvedConfig.clientSecret,
       tenantId: resolvedConfig.tenantId,
       accountsServer: resolvedConfig.accountsServer,
+      accountId,
       createdAt: Date.now(),
     };
 

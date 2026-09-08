@@ -249,8 +249,13 @@ function CreateAccountModal({
           };
         }
       }
-      await accountsApi.create(payload);
-      push(`Account "${name || email}" created`, 'success');
+      const result = await accountsApi.create(payload);
+      if (result.authorizeUrl) {
+        window.open(result.authorizeUrl, '_blank', 'noopener');
+        push(result.message ?? 'Account created. Complete authorisation in the new tab.', 'info');
+      } else {
+        push(`Account "${name || email}" created`, 'success');
+      }
       onCreated();
     } catch (err) {
       setError((err as Error).message);
@@ -414,6 +419,7 @@ function AccountDetailModal({
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [reauthClientId, setReauthClientId] = useState<string>('');
+  const [reauthFlow, setReauthFlow] = useState<{ verificationUri?: string; userCode?: string; message?: string } | null>(null);
 
   const authenticated = isAuthenticatedAccount(account);
 
@@ -455,6 +461,7 @@ function AccountDetailModal({
     setError(null);
     try {
       const res = await accountsApi.reauth(account.id, reauthClientId || undefined);
+      setReauthFlow({ verificationUri: res.verificationUri || res.authorizeUrl, userCode: res.userCode, message: res.message });
       push(res.message ?? 'Re-auth flow started', 'info');
       if (res.authorizeUrl) {
         window.open(res.authorizeUrl, '_blank', 'noopener');
@@ -536,6 +543,16 @@ function AccountDetailModal({
         <div className="mb-4">
           <Alert tone={testResult.ok ? 'success' : 'error'}>
             <span className="font-medium">{testResult.ok ? 'Connected' : 'Failed'}:</span> {testResult.message}
+          </Alert>
+        </div>
+      )}
+
+      {reauthFlow && (
+        <div className="mb-4">
+          <Alert tone="info">
+            <div>{reauthFlow.message || 'Complete reauthentication.'}</div>
+            {reauthFlow.verificationUri && <div className="mt-2"><a className="font-medium underline" href={reauthFlow.verificationUri} target="_blank" rel="noreferrer">Open authorisation page</a></div>}
+            {reauthFlow.userCode && <div className="mt-2 font-mono font-bold">Code: {reauthFlow.userCode}</div>}
           </Alert>
         </div>
       )}
