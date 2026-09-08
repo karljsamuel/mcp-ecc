@@ -527,7 +527,52 @@ export class McpEccServer {
           result = { success: true };
         }
         else if (name === 'accounts.sync') {
-          result = { message: 'Sync triggered - implementation pending' };
+          const args_ = args as { accountId: string; types?: Array<'mail' | 'calendar' | 'contacts'> };
+          const account = await this.getAccountOwned(args_.accountId);
+          const providers = await this.getOrCreateProviders(args_.accountId);
+          const types = args_.types?.length ? args_.types : ['mail', 'calendar', 'contacts'];
+          const synced: Record<string, number> = {};
+          const errors: Record<string, string> = {};
+
+          if (types.includes('mail') && providers.mail) {
+            try {
+              const folders = await providers.mail.listFolders();
+              await this.storage.saveMailFolders(account.id, folders);
+              let count = 0;
+              for (const folder of folders.slice(0, 20)) {
+                const messages = await providers.mail.listMessages(folder.id, { limit: 50 });
+                await this.storage.saveMailMessages(account.id, messages);
+                count += messages.length;
+              }
+              synced.mail = count;
+            } catch (error: any) { errors.mail = error?.message || String(error); }
+          }
+
+          if (types.includes('calendar') && providers.calendar) {
+            try {
+              const calendars = await providers.calendar.listCalendars();
+              await this.storage.saveCalendars(account.id, calendars);
+              const min = Date.now() - 30 * 86400000;
+              const max = Date.now() + 90 * 86400000;
+              let count = 0;
+              for (const calendar of calendars) {
+                const events = await providers.calendar.listEvents(calendar.id, { timeMin: min, timeMax: max, limit: 200 });
+                await this.storage.saveCalendarEvents(account.id, calendar.id, events);
+                count += events.length;
+              }
+              synced.calendar = count;
+            } catch (error: any) { errors.calendar = error?.message || String(error); }
+          }
+
+          if (types.includes('contacts') && providers.contacts) {
+            try {
+              const contacts = await providers.contacts.listContacts({ limit: 200 });
+              await this.storage.saveContacts(account.id, contacts);
+              synced.contacts = contacts.length;
+            } catch (error: any) { errors.contacts = error?.message || String(error); }
+          }
+
+          result = { accountId: account.id, synced, errors, success: Object.keys(errors).length === 0 };
         }
 
         // Mail tools
@@ -645,13 +690,15 @@ export class McpEccServer {
           const args_ = args as { accountId: string; displayName: string; emails: any[]; phones?: any[]; organization?: string; jobTitle?: string; notes?: string };
           const providers = await this.getOrCreateProviders(args_.accountId);
           if (!providers.contacts) throw new Error('Contacts not supported for this account');
-          result = { contact: await providers.contacts.createContact(args_) };
+          const { accountId: _accountId, ...contactInput } = args_;
+          result = { contact: await providers.contacts.createContact({ ...contactInput, emails: contactInput.emails || [], phones: contactInput.phones || [] }) };
         }
         else if (name === 'contacts.update') {
           const args_ = args as { accountId: string; contactId: string; displayName?: string; emails?: any[]; phones?: any[]; organization?: string; jobTitle?: string; notes?: string };
           const providers = await this.getOrCreateProviders(args_.accountId);
           if (!providers.contacts) throw new Error('Contacts not supported for this account');
-          result = { contact: await providers.contacts.updateContact(args_.contactId, args_) };
+          const { accountId: _accountId, contactId: _contactId, ...contactPatches } = args_;
+          result = { contact: await providers.contacts.updateContact(args_.contactId, { ...contactPatches, emails: contactPatches.emails || [], phones: contactPatches.phones || [] }) };
         }
         else if (name === 'contacts.delete') {
           const args_ = args as { accountId: string; contactId: string };
