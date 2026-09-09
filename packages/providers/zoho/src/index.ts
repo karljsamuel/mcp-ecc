@@ -291,9 +291,16 @@ export class ZohoProvider implements IMailProvider, ICalendarProvider, IContacts
   }
 
   async listEvents(calendarId: string, options: ListEventsOptions = {}): Promise<CalendarEvent[]> {
+    // Zoho requires a JSON `range` parameter and rejects ranges over 31 days.
+    const min = options.timeMin ?? Date.now();
+    const max = options.timeMax ?? (min + 30 * 86400000);
+    const boundedMax = Math.min(max, min + 30 * 86400000);
+    const compactDate = (value: number) => {
+      const iso = new Date(value).toISOString();
+      return iso.slice(0, 10).replaceAll('-', '');
+    };
     const params = new URLSearchParams();
-    if (options.timeMin) params.set('startTime', new Date(options.timeMin).toISOString());
-    if (options.timeMax) params.set('endTime', new Date(options.timeMax).toISOString());
+    params.set('range', JSON.stringify({ start: compactDate(min), end: compactDate(boundedMax) }));
     if (options.limit) params.set('limit', String(options.limit));
 
     const res = await this.fetchZoho<{ events: any[] }>(
@@ -492,7 +499,8 @@ export class ZohoProvider implements IMailProvider, ICalendarProvider, IContacts
     if (!value) return Date.now();
     if (typeof value === 'number') return value;
     // Zoho v1 returns ISO-like or compact strings; ISO parses directly
-    const t = Date.parse(value);
+    const normalized = String(value).replace(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})([+-]\d{4})$/, '$1-$2-$3T$4:$5:$6$7');
+    const t = Date.parse(normalized);
     return Number.isNaN(t) ? Date.now() : t;
   }
 
