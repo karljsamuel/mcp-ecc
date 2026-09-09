@@ -14,6 +14,7 @@ import { McpEccServer } from '@mcp-ecc/mcp-server';
 const env = (name: string): string | undefined => process.env[name]?.trim();
 
 const ENCRYPTION_KEY = env('MCP_ENCRYPTION_KEY') || 'default-secret-key';
+const PACKAGE_VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version as string;
 const DB_PROVIDER = env('MCP_DB_PROVIDER') || env('DB_PROVIDER');
 
 if (!DB_PROVIDER) {
@@ -1170,7 +1171,7 @@ async function runTui(): Promise<void> {
 program
   .name('mcp-ecc')
   .description('MCP Email, Calendar, and Contacts Server')
-  .version('0.3.1-beta.1');
+  .version(PACKAGE_VERSION);
 
 program
   .command('login')
