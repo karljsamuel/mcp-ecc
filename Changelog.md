@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.2] - 2026-09-09
+
+### Added
+- **Complete MCP account synchronisation** — `accounts.sync` now synchronises mail folders/messages, calendars/events, and contacts with per-domain result and error reporting.
+- **Live provider health checks** — startup, periodic, and on-demand connection checks now exercise provider APIs and persist `healthy`/`unhealthy` status.
+- **Versioned central schema** — SQLite and D1 share a tracked schema manifest, migration ledger, idempotent upgrades, rollback/retry behaviour, and legacy-column preservation.
+
+### Changed
+- **Stable release** — removed beta publishing tags; npm and MCP Registry releases now use the stable channel.
+- **OAuth callback flow** — browser authentication redirects back to Accounts with success/error feedback and persists returned account credentials and provider metadata.
+- **Zoho Calendar CRUD** — uses Zoho `range`, `eventdata`, calendar/event UIDs, ETags, bounded date ranges, URL encoding, and compact timestamp parsing.
+- **Contact update payloads** — Google includes source ETags; Zoho uses the documented contacts payload structure.
+- **Docker security** — Alpine packages are upgraded during image builds and unnecessary compiler packages are removed from the runtime image.
+- **npm runtime configuration** — CRLF environment values are trimmed for reliable Windows `.env` use.
+
+### Fixed
+- **D1 HTTP batch requests** — the REST client no longer sends the Workers-only array batch format; statements execute through valid D1 HTTP query objects.
+- **D1 legacy OAuth secrets** — previous WebCrypto-encrypted client secrets remain recoverable after migration to the current encryption implementation.
+- **MCP contact creation** — normalises optional email/phone arrays and removes transport-only fields before provider calls.
+- **Admin DELETE requests** — empty DELETE requests no longer send an invalid JSON content type.
+- **CLI version reporting** — the CLI reports the installed package version instead of the legacy hardcoded beta version.
+- **Login/session races** — stale authentication probes cannot overwrite successful login state; sessions persist through restarts.
+
+### Security
+- **Dependency overrides** — updated vulnerable transitive npm packages including `ip-address`, `qs`, `tar`, and `undici`.
+- **Docker base updates** — builder and runtime Alpine layers run `apk upgrade --no-cache` during image creation.
+
 ## [0.5.1] - 2026-09-08
 
 ### Added
