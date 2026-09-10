@@ -23,9 +23,11 @@ import type {
 export class ZohoProvider implements IMailProvider, ICalendarProvider, IContactsProvider {
   private mailAccountId: string | null = null;
   private accountsServer: string;
+  private calendarServer: string;
 
   constructor(private accountId: string, private credentials: AccountCredentials) {
     this.accountsServer = credentials.config?.accountsServer || 'accounts.zoho.com';
+    this.calendarServer = this.accountsServer.replace(/^accounts\./, 'calendar.');
   }
 
   private async getHeaders(): Promise<Record<string, string>> {
@@ -64,15 +66,21 @@ export class ZohoProvider implements IMailProvider, ICalendarProvider, IContacts
     this.credentials.expiryDate = Date.now() + (data.expires_in || 3600) * 1000;
   }
 
-  private async fetchZoho<T>(url: string, options: RequestInit = {}): Promise<T> {
+  private async fetchZoho<T>(url: string, options: RequestInit = {}, retry = true): Promise<T> {
     const response = await fetch(url, {
       ...options,
       headers: { ...await this.getHeaders(), ...options.headers },
     });
 
+    if (response.status === 401 && retry && this.credentials.refreshToken) {
+      await this.refreshToken();
+      return this.fetchZoho<T>(url, options, false);
+    }
+
     if (!response.ok) {
       const error: any = await response.json().catch(() => ({}));
-      const detail = error.message || error.error || error.error_description || error.errorCode || JSON.stringify(error);
+      const detailValue = error.message || error.error || error.error_description || error.errorCode || error;
+      const detail = typeof detailValue === 'string' ? detailValue : JSON.stringify(detailValue);
       throw new Error(`Zoho API error: ${response.status} - ${detail || response.statusText}`);
     }
 
@@ -144,37 +152,21 @@ export class ZohoProvider implements IMailProvider, ICalendarProvider, IContacts
 
   async getMessage(messageId: string): Promise<EmailMessage> {
     const zuid = await this.getZohoMailAccountId();
-    // Content endpoint requires the containing folderId and returns only
-    // content — fetch metadata from the view list, then content separately.
-    const folders = await this.fetchZoho<{ data: any[] }>(
-      `https://mail.zoho.com/api/v1/accounts/${zuid}/folders`
-    );
-    const inbox = (folders.data || []).find((f: any) => f.folderName?.toLowerCase() === 'inbox');
-    const folderId = inbox?.folderId;
-    if (!folderId) throw new Error('INBOX folder not found for Zoho account');
-
-    const list = await this.fetchZoho<{ data: any[] }>(
-      `https://mail.zoho.com/api/v1/accounts/${zuid}/messages/view?folderId=${folderId}&limit=100`
-    );
-    const meta = (list.data || []).find((i: any) => String(i.messageId) === String(messageId));
-
-    const contentRes = await this.fetchZoho<{ data: any }>(
-      `https://mail.zoho.com/api/accounts/${zuid}/folders/${folderId}/messages/${messageId}/content`
-    );
-    
-    const item = contentRes.data;
+    const folders = await this.fetchZoho<{ data: any[] }>(`https://mail.zoho.com/api/v1/accounts/${zuid}/folders`);
+    let meta: any;
+    let folderId: string | undefined;
+    for (const folder of folders.data || []) {
+      const list = await this.fetchZoho<{ data: any[] }>(`https://mail.zoho.com/api/v1/accounts/${zuid}/messages/view?folderId=${folder.folderId}&limit=100`);
+      meta = (list.data || []).find((item: any) => String(item.messageId) === String(messageId));
+      if (meta) { folderId = String(folder.folderId); break; }
+    }
+    if (!folderId) throw new Error(`Zoho message not found: ${messageId}`);
+    const contentRes = await this.fetchZoho<{ data: any }>(`https://mail.zoho.com/api/accounts/${zuid}/folders/${folderId}/messages/${messageId}/content`);
+    const item = contentRes.data || {};
     return {
-      id: messageId,
-      from: { address: meta?.sender || '' },
-      to: meta?.toAddress ? [{ address: meta.toAddress }] : [],
-      subject: meta?.subject || '',
-      snippet: meta?.summary || '',
-      body: item.content || '',
-      htmlBody: item.content,
-      date: new Date(Number(meta?.receivedTime || Date.now())).getTime(),
-      unread: meta?.status === '0',
-      starred: meta?.flagged === 'true',
-      labelsOrFolders: [],
+      id: messageId, from: { address: meta?.sender || '' }, to: meta?.toAddress ? [{ address: meta.toAddress }] : [],
+      subject: meta?.subject || '', snippet: meta?.summary || '', body: item.content || '', htmlBody: item.content,
+      date: new Date(Number(meta?.receivedTime || Date.now())).getTime(), unread: meta?.status === '0', starred: meta?.flagged === 'true', labelsOrFolders: [String(folderId)],
     };
   }
 
@@ -260,7 +252,7 @@ export class ZohoProvider implements IMailProvider, ICalendarProvider, IContacts
     const folderId = inbox?.folderId;
     if (!folderId) throw new Error('INBOX folder not found for Zoho account');
     await this.fetchZoho(
-      `https://mail.zoho.com/api/accounts/${zuid}/folders/${folderId}/messages/${messageId}`,
+      `https://mail.zoho.com/api/accounts/${zuid}/folders/${folderId}/messages/${messageId}?expunge=${permanent ? 'true' : 'false'}`,
       { method: 'DELETE' }
     );
   }
@@ -268,8 +260,8 @@ export class ZohoProvider implements IMailProvider, ICalendarProvider, IContacts
   // --- ICalendarProvider ---
 
   async listCalendars(): Promise<Calendar[]> {
-    const res = await this.fetchZoho<{ calendars: any[] }>(
-      `https://calendar.zoho.com/api/v1/calendars`
+    const res = await this.fetchCalendar<{ calendars: any[] }>(
+      `https://${this.calendarServer}/api/v1/calendars`
     );
     
     return (res.calendars || []).map(cal => ({
@@ -285,27 +277,50 @@ export class ZohoProvider implements IMailProvider, ICalendarProvider, IContacts
     }));
   }
 
+  private async fetchCalendar<T>(url: string, options: RequestInit = {}): Promise<T> {
+    const servers = [this.calendarServer, 'calendar.zoho.com', 'calendar.zoho.eu', 'calendar.zoho.in', 'calendar.zoho.com.cn', 'calendar.zoho.jp', 'calendar.zoho.com.au']
+      .filter((server, index, list) => list.indexOf(server) === index);
+    let lastError: unknown;
+    for (const server of servers) {
+      const candidate = url.replace(`https://${this.calendarServer}`, `https://${server}`);
+      try {
+        return await this.fetchZoho<T>(candidate, options);
+      } catch (error: any) {
+        lastError = error;
+        if (!/Zoho API error: (401|404)/.test(String(error?.message || ''))) throw error;
+      }
+    }
+    throw lastError;
+  }
+
   private zohoEventTime(d: number): string {
     const s = new Date(d).toISOString();
     return s.slice(0,4) + s.slice(5,7) + s.slice(8,10) + 'T' + s.slice(11,13) + s.slice(14,16) + s.slice(17,19) + 'Z';
   }
 
   async listEvents(calendarId: string, options: ListEventsOptions = {}): Promise<CalendarEvent[]> {
+    // Zoho requires a JSON `range` parameter and rejects ranges over 31 days.
+    const min = options.timeMin ?? Date.now();
+    const max = options.timeMax ?? (min + 30 * 86400000);
+    const boundedMax = Math.min(max, min + 30 * 86400000);
+    const compactDate = (value: number) => {
+      const iso = new Date(value).toISOString();
+      return iso.slice(0, 10).replaceAll('-', '');
+    };
     const params = new URLSearchParams();
-    if (options.timeMin) params.set('startTime', new Date(options.timeMin).toISOString());
-    if (options.timeMax) params.set('endTime', new Date(options.timeMax).toISOString());
+    params.set('range', JSON.stringify({ start: compactDate(min), end: compactDate(boundedMax) }));
     if (options.limit) params.set('limit', String(options.limit));
 
-    const res = await this.fetchZoho<{ events: any[] }>(
-      `https://calendar.zoho.com/api/v1/calendars/${encodeURIComponent(calendarId)}/events?${params}`
+    const res = await this.fetchCalendar<{ events: any[] }>(
+      `https://${this.calendarServer}/api/v1/calendars/${calendarId}/events?${params}`
     );
     
     return (res.events || []).map(evt => this.mapEvent(evt));
   }
 
   async getEvent(calendarId: string, eventId: string): Promise<CalendarEvent> {
-    const res = await this.fetchZoho<{ events?: any[]; event?: any }>(
-      `https://calendar.zoho.com/api/v1/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`
+    const res = await this.fetchCalendar<{ events?: any[]; event?: any }>(
+      `https://${this.calendarServer}/api/v1/calendars/${calendarId}/events/${eventId}`
     );
     return this.mapEvent((res.events && res.events[0]) || res.event || res);
   }
@@ -323,10 +338,10 @@ export class ZohoProvider implements IMailProvider, ICalendarProvider, IContacts
         end: this.zohoEventTime(event.endAt),
       },
       isallday: event.allDay === true,
-      attendees: event.attendees?.map(a => ({ email: a.address, is_organizer: false })),
+      ...(event.attendees?.length ? { attendees: event.attendees.map(a => ({ email: a.address, is_organizer: false })) } : {}),
     };
-    const url = `https://calendar.zoho.com/api/v1/calendars/${encodeURIComponent(calendarId)}/events?eventdata=${encodeURIComponent(JSON.stringify(eventdata))}`;
-    const res = await this.fetchZoho<{ events?: any[]; event?: any }>(url, { method: 'POST' });
+    const url = `https://${this.calendarServer}/api/v1/calendars/${calendarId}/events?eventdata=${encodeURIComponent(JSON.stringify(eventdata))}`;
+    const res = await this.fetchCalendar<{ events?: any[]; event?: any }>(url, { method: 'POST' });
     return this.mapEvent((res.events || [])[0] || res.event || res);
   }
 
@@ -336,7 +351,6 @@ export class ZohoProvider implements IMailProvider, ICalendarProvider, IContacts
     const startAt = patches.startAt ?? current.startAt;
     const endAt = patches.endAt ?? current.endAt;
     const eventdata = {
-      eventid: raw.eventid || raw.eventId || raw.uid || eventId,
       etag: raw.etag,
       title: patches.summary ?? current.summary,
       description: patches.description ?? current.description,
@@ -348,23 +362,40 @@ export class ZohoProvider implements IMailProvider, ICalendarProvider, IContacts
       },
       isallday: patches.allDay ?? current.allDay,
     };
-    const url = `https://calendar.zoho.com/api/v1/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventdata.eventid)}?eventdata=${encodeURIComponent(JSON.stringify(eventdata))}`;
-    const res = await this.fetchZoho<{ event?: any; events?: any[] }>(url, { method: 'PUT' });
+    const targetId = raw.uid || raw.eventid || raw.eventId || eventId;
+    const url = `https://${this.calendarServer}/api/v1/calendars/${calendarId}/events/${targetId}?eventdata=${encodeURIComponent(JSON.stringify(eventdata))}`;
+    const res = await this.fetchCalendar<{ event?: any; events?: any[] }>(url, { method: 'PUT' });
     return this.mapEvent((res.events || [])[0] || res.event || res);
   }
 
   async deleteEvent(calendarId: string, eventId: string): Promise<void> {
     const current = await this.getEvent(calendarId, eventId);
     const raw: any = current.raw || {};
-    const targetId = raw.eventid || raw.eventId || raw.uid || eventId;
-    const eventdata = { eventid: targetId, etag: raw.etag };
-    const url = `https://calendar.zoho.com/api/v1/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(targetId)}?eventdata=${encodeURIComponent(JSON.stringify(eventdata))}`;
-    await this.fetchZoho(url, { method: 'DELETE' });
+    const targetId = raw.uid || raw.eventid || raw.eventId || eventId;
+    const url = `https://${this.calendarServer}/api/v1/calendars/${calendarId}/events/${targetId}`;
+    await this.fetchCalendar(url, { method: 'DELETE', headers: raw.etag ? { etag: String(raw.etag) } : undefined });
   }
 
   async freeBusy(calendarIds: string[], timeMin: number, timeMax: number): Promise<Array<{ calendarId: string; busy: Array<{ start: number; end: number }> }>> {
-    // Zoho free/busy API would be implemented here
-    return calendarIds.map(id => ({ calendarId: id, busy: [] }));
+    const email = this.credentials.config?.email;
+    if (!email) throw new Error('Zoho free/busy requires the account email');
+    const compact = (value: number) => {
+      const iso = new Date(value).toISOString();
+      return iso.slice(0, 10).replaceAll('-', '') + 'T' + iso.slice(11, 19).replaceAll(':', '');
+    };
+    const params = new URLSearchParams({ uemail: String(email), sdate: compact(timeMin), edate: compact(timeMax), ftype: 'eventbased' });
+    const res = await this.fetchCalendar<Record<string, any>>(`https://${this.calendarServer}/api/v1/calendars/freebusy?${params}`);
+    const busy: Array<{ start: number; end: number }> = [];
+    for (const value of Object.values(res)) {
+      if (!Array.isArray(value)) continue;
+      for (const item of value.flat()) {
+        if (typeof item !== 'string' || !item.includes('-')) continue;
+        const [from, to] = item.split('-');
+        const day = new Date(timeMin).toISOString().slice(0, 10);
+        busy.push({ start: Date.parse(`${day}T${from}:00Z`), end: Date.parse(`${day}T${to}:00Z`) });
+      }
+    }
+    return calendarIds.map(id => ({ calendarId: id, busy }));
   }
 
   // --- IContactsProvider ---
@@ -384,7 +415,7 @@ export class ZohoProvider implements IMailProvider, ICalendarProvider, IContacts
     const res = await this.fetchZoho<{ contact: any }>(
       `https://contacts.zoho.com/api/v1/accounts/self/contacts/${contactId}`
     );
-    return this.mapContact(res.contact || res);
+    return this.mapContact(this.unwrapContact(res));
   }
 
   async createContact(contact: CreateContactInput): Promise<Contact> {
@@ -405,7 +436,7 @@ export class ZohoProvider implements IMailProvider, ICalendarProvider, IContacts
         body: JSON.stringify(payload),
       }
     );
-    return this.mapContact(res.contacts || res);
+    return this.mapContact(this.unwrapContact(res));
   }
 
   async updateContact(contactId: string, patches: UpdateContactInput): Promise<Contact> {
@@ -423,7 +454,7 @@ export class ZohoProvider implements IMailProvider, ICalendarProvider, IContacts
         }}),
       }
     );
-    return this.mapContact(res.contact || res);
+    return this.mapContact(this.unwrapContact(res));
   }
 
   async deleteContact(contactId: string): Promise<void> {
@@ -492,8 +523,17 @@ export class ZohoProvider implements IMailProvider, ICalendarProvider, IContacts
     if (!value) return Date.now();
     if (typeof value === 'number') return value;
     // Zoho v1 returns ISO-like or compact strings; ISO parses directly
-    const t = Date.parse(value);
+    const normalized = String(value).replace(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})([+-]\d{4})$/, '$1-$2-$3T$4:$5:$6$7');
+    const t = Date.parse(normalized);
     return Number.isNaN(t) ? Date.now() : t;
+  }
+
+  private unwrapContact(response: any): any {
+    if (Array.isArray(response?.contacts)) return response.contacts[0] || {};
+    if (response?.contacts && typeof response.contacts === 'object') return response.contacts;
+    if (response?.contact) return Array.isArray(response.contact) ? response.contact[0] || {} : response.contact;
+    if (response?.data) return Array.isArray(response.data) ? response.data[0] || {} : response.data;
+    return response || {};
   }
 
   private mapContact(c: any): Contact {

@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="Logo.png" alt="mcp-ecc" width="300" height="120" />
+<img src="https://raw.githubusercontent.com/karljsamuel/mcp-ecc/main/Logo.png" alt="mcp-ecc" width="300" height="120" />
 
 # mcp-ecc
 
@@ -10,7 +10,7 @@ A Model Context Protocol (MCP) server that lets AI assistants read, write and ma
 
 ![License](https://img.shields.io/badge/license-MIT-blue?logo=open-source-initiative&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)
-![Version](https://img.shields.io/badge/version-0.5.1-purple)
+![Version](https://img.shields.io/badge/version-0.6.0-purple)
 [![Sponsor](https://img.shields.io/github/sponsors/karljsamuel?color=ea4aaa&logo=github-sponsors&logoColor=white)](https://github.com/sponsors/karljsamuel)
 ![Node](https://img.shields.io/badge/node-%3E%3D24-339933?logo=nodedotjs&logoColor=white)
 ![MCP](https://img.shields.io/badge/Model%20Context%20Protocol-black)
@@ -38,7 +38,7 @@ A Model Context Protocol (MCP) server that lets AI assistants read, write and ma
 docker run -d --name mcp-ecc \
   -p 3001:3001 \
   -e MCP_ENCRYPTION_KEY="$(openssl rand -hex 32)" \
-  karljsamuel/mcp-ecc:beta
+  karljsamuel/mcp-ecc:latest
 ```
 
 Open **http://localhost:3001** → create the admin account → add your provider accounts.

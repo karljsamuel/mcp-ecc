@@ -60,6 +60,16 @@ export class McpEccServer {
     }
 
     const account = await this.getAccountOwned(accountId);
+    const credentials: any = { ...(account.credentials || {}) };
+    credentials.config = { ...(credentials.config || {}), email: account.email };
+    if (credentials.oauthClientId) {
+      const oauthClient = await this.storage.getOAuthClient(credentials.oauthClientId);
+      if (oauthClient) {
+        credentials.clientId = oauthClient.clientId;
+        credentials.clientSecret = oauthClient.clientSecret;
+        credentials.config = { ...(credentials.config || {}), accountsServer: oauthClient.accountsServer };
+      }
+    }
 
     let mailProvider: any;
     let calendarProvider: any;
@@ -67,35 +77,35 @@ export class McpEccServer {
 
     switch (account.provider) {
       case 'google':
-        mailProvider = new GoogleProvider(accountId, account.credentials);
-        calendarProvider = new GoogleProvider(accountId, account.credentials);
-        contactsProvider = new GoogleProvider(accountId, account.credentials);
+        mailProvider = new GoogleProvider(accountId, credentials);
+        calendarProvider = new GoogleProvider(accountId, credentials);
+        contactsProvider = new GoogleProvider(accountId, credentials);
         break;
       case 'microsoft':
-        mailProvider = new MicrosoftProvider(accountId, account.credentials);
-        calendarProvider = new MicrosoftProvider(accountId, account.credentials);
-        contactsProvider = new MicrosoftProvider(accountId, account.credentials);
+        mailProvider = new MicrosoftProvider(accountId, credentials);
+        calendarProvider = new MicrosoftProvider(accountId, credentials);
+        contactsProvider = new MicrosoftProvider(accountId, credentials);
         break;
       case 'zoho':
-        mailProvider = new ZohoProvider(accountId, account.credentials);
-        calendarProvider = new ZohoProvider(accountId, account.credentials);
-        contactsProvider = new ZohoProvider(accountId, account.credentials);
+        mailProvider = new ZohoProvider(accountId, credentials);
+        calendarProvider = new ZohoProvider(accountId, credentials);
+        contactsProvider = new ZohoProvider(accountId, credentials);
         break;
       case 'imap':
       case 'smtp':
-        mailProvider = new ImapSmtpProvider(accountId, account.credentials);
+        mailProvider = new ImapSmtpProvider(accountId, credentials);
         calendarProvider = null; // Not supported
         contactsProvider = null; // Not supported
         break;
       case 'caldav':
         mailProvider = null; // Not supported
-        calendarProvider = new CalDAVProvider(accountId, account.credentials);
+        calendarProvider = new CalDAVProvider(accountId, credentials);
         contactsProvider = null; // Not supported
         break;
       case 'carddav':
         mailProvider = null; // Not supported
         calendarProvider = null; // Not supported
-        contactsProvider = new CardDAVProvider(accountId, account.credentials);
+        contactsProvider = new CardDAVProvider(accountId, credentials);
         break;
       default:
         throw new Error(`Unsupported provider: ${account.provider}`);
