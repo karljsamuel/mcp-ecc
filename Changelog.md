@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.5.2] - 2026-09-09
+## [0.6.0] - 2026-09-10
 
 ### Added
 - **Complete MCP account synchronisation** — `accounts.sync` now synchronises mail folders/messages, calendars/events, and contacts with per-domain result and error reporting.
@@ -31,6 +31,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Security
 - **Dependency overrides** — updated vulnerable transitive npm packages including `ip-address`, `qs`, `tar`, and `undici`.
 - **Docker base updates** — builder and runtime Alpine layers run `apk upgrade --no-cache` during image creation.
+
+### Maintenance
+- **Monorepo cleanup** — removed the obsolete pre-monorepo root `src/` implementation; all supported runtime code now lives under `packages/*`.
+- **Release metadata** — aligned workspace packages, npm metadata, MCP Registry metadata, documentation, and lockfile at `0.6.0`.
 
 ## [0.5.1] - 2026-09-08
 
