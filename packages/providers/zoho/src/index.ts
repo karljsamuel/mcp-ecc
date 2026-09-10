@@ -66,15 +66,21 @@ export class ZohoProvider implements IMailProvider, ICalendarProvider, IContacts
     this.credentials.expiryDate = Date.now() + (data.expires_in || 3600) * 1000;
   }
 
-  private async fetchZoho<T>(url: string, options: RequestInit = {}): Promise<T> {
+  private async fetchZoho<T>(url: string, options: RequestInit = {}, retry = true): Promise<T> {
     const response = await fetch(url, {
       ...options,
       headers: { ...await this.getHeaders(), ...options.headers },
     });
 
+    if (response.status === 401 && retry && this.credentials.refreshToken) {
+      await this.refreshToken();
+      return this.fetchZoho<T>(url, options, false);
+    }
+
     if (!response.ok) {
       const error: any = await response.json().catch(() => ({}));
-      const detail = error.message || error.error || error.error_description || error.errorCode || JSON.stringify(error);
+      const detailValue = error.message || error.error || error.error_description || error.errorCode || error;
+      const detail = typeof detailValue === 'string' ? detailValue : JSON.stringify(detailValue);
       throw new Error(`Zoho API error: ${response.status} - ${detail || response.statusText}`);
     }
 
@@ -348,7 +354,7 @@ export class ZohoProvider implements IMailProvider, ICalendarProvider, IContacts
         end: this.zohoEventTime(event.endAt),
       },
       isallday: event.allDay === true,
-      attendees: event.attendees?.map(a => ({ email: a.address, is_organizer: false })),
+      ...(event.attendees?.length ? { attendees: event.attendees.map(a => ({ email: a.address, is_organizer: false })) } : {}),
     };
     const url = `https://${this.calendarServer}/api/v1/calendars/${encodeURIComponent(calendarId)}/events?eventdata=${encodeURIComponent(JSON.stringify(eventdata))}`;
     const res = await this.fetchCalendar<{ events?: any[]; event?: any }>(url, { method: 'POST' });
