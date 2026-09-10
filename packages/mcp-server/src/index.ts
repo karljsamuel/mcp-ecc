@@ -61,6 +61,7 @@ export class McpEccServer {
 
     const account = await this.getAccountOwned(accountId);
     const credentials: any = { ...(account.credentials || {}) };
+    credentials.config = { ...(credentials.config || {}), email: account.email };
     if (credentials.oauthClientId) {
       const oauthClient = await this.storage.getOAuthClient(credentials.oauthClientId);
       if (oauthClient) {

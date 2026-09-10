@@ -152,37 +152,21 @@ export class ZohoProvider implements IMailProvider, ICalendarProvider, IContacts
 
   async getMessage(messageId: string): Promise<EmailMessage> {
     const zuid = await this.getZohoMailAccountId();
-    // Content endpoint requires the containing folderId and returns only
-    // content — fetch metadata from the view list, then content separately.
-    const folders = await this.fetchZoho<{ data: any[] }>(
-      `https://mail.zoho.com/api/v1/accounts/${zuid}/folders`
-    );
-    const inbox = (folders.data || []).find((f: any) => f.folderName?.toLowerCase() === 'inbox');
-    const folderId = inbox?.folderId;
-    if (!folderId) throw new Error('INBOX folder not found for Zoho account');
-
-    const list = await this.fetchZoho<{ data: any[] }>(
-      `https://mail.zoho.com/api/v1/accounts/${zuid}/messages/view?folderId=${folderId}&limit=100`
-    );
-    const meta = (list.data || []).find((i: any) => String(i.messageId) === String(messageId));
-
-    const contentRes = await this.fetchZoho<{ data: any }>(
-      `https://mail.zoho.com/api/accounts/${zuid}/folders/${folderId}/messages/${messageId}/content`
-    );
-    
-    const item = contentRes.data;
+    const folders = await this.fetchZoho<{ data: any[] }>(`https://mail.zoho.com/api/v1/accounts/${zuid}/folders`);
+    let meta: any;
+    let folderId: string | undefined;
+    for (const folder of folders.data || []) {
+      const list = await this.fetchZoho<{ data: any[] }>(`https://mail.zoho.com/api/v1/accounts/${zuid}/messages/view?folderId=${folder.folderId}&limit=100`);
+      meta = (list.data || []).find((item: any) => String(item.messageId) === String(messageId));
+      if (meta) { folderId = String(folder.folderId); break; }
+    }
+    if (!folderId) throw new Error(`Zoho message not found: ${messageId}`);
+    const contentRes = await this.fetchZoho<{ data: any }>(`https://mail.zoho.com/api/accounts/${zuid}/folders/${folderId}/messages/${messageId}/content`);
+    const item = contentRes.data || {};
     return {
-      id: messageId,
-      from: { address: meta?.sender || '' },
-      to: meta?.toAddress ? [{ address: meta.toAddress }] : [],
-      subject: meta?.subject || '',
-      snippet: meta?.summary || '',
-      body: item.content || '',
-      htmlBody: item.content,
-      date: new Date(Number(meta?.receivedTime || Date.now())).getTime(),
-      unread: meta?.status === '0',
-      starred: meta?.flagged === 'true',
-      labelsOrFolders: [],
+      id: messageId, from: { address: meta?.sender || '' }, to: meta?.toAddress ? [{ address: meta.toAddress }] : [],
+      subject: meta?.subject || '', snippet: meta?.summary || '', body: item.content || '', htmlBody: item.content,
+      date: new Date(Number(meta?.receivedTime || Date.now())).getTime(), unread: meta?.status === '0', starred: meta?.flagged === 'true', labelsOrFolders: [String(folderId)],
     };
   }
 
@@ -268,7 +252,7 @@ export class ZohoProvider implements IMailProvider, ICalendarProvider, IContacts
     const folderId = inbox?.folderId;
     if (!folderId) throw new Error('INBOX folder not found for Zoho account');
     await this.fetchZoho(
-      `https://mail.zoho.com/api/accounts/${zuid}/folders/${folderId}/messages/${messageId}`,
+      `https://mail.zoho.com/api/accounts/${zuid}/folders/${folderId}/messages/${messageId}?expunge=${permanent ? 'true' : 'false'}`,
       { method: 'DELETE' }
     );
   }
@@ -393,8 +377,25 @@ export class ZohoProvider implements IMailProvider, ICalendarProvider, IContacts
   }
 
   async freeBusy(calendarIds: string[], timeMin: number, timeMax: number): Promise<Array<{ calendarId: string; busy: Array<{ start: number; end: number }> }>> {
-    // Zoho free/busy API would be implemented here
-    return calendarIds.map(id => ({ calendarId: id, busy: [] }));
+    const email = this.credentials.config?.email;
+    if (!email) throw new Error('Zoho free/busy requires the account email');
+    const compact = (value: number) => {
+      const iso = new Date(value).toISOString();
+      return iso.slice(0, 10).replaceAll('-', '') + 'T' + iso.slice(11, 19).replaceAll(':', '');
+    };
+    const params = new URLSearchParams({ uemail: String(email), sdate: compact(timeMin), edate: compact(timeMax), ftype: 'eventbased' });
+    const res = await this.fetchCalendar<Record<string, any>>(`https://${this.calendarServer}/api/v1/calendars/freebusy?${params}`);
+    const busy: Array<{ start: number; end: number }> = [];
+    for (const value of Object.values(res)) {
+      if (!Array.isArray(value)) continue;
+      for (const item of value.flat()) {
+        if (typeof item !== 'string' || !item.includes('-')) continue;
+        const [from, to] = item.split('-');
+        const day = new Date(timeMin).toISOString().slice(0, 10);
+        busy.push({ start: Date.parse(`${day}T${from}:00Z`), end: Date.parse(`${day}T${to}:00Z`) });
+      }
+    }
+    return calendarIds.map(id => ({ calendarId: id, busy }));
   }
 
   // --- IContactsProvider ---
