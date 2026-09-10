@@ -328,7 +328,7 @@ export class ZohoProvider implements IMailProvider, ICalendarProvider, IContacts
     if (options.limit) params.set('limit', String(options.limit));
 
     const res = await this.fetchCalendar<{ events: any[] }>(
-      `https://${this.calendarServer}/api/v1/calendars/${encodeURIComponent(calendarId)}/events?${params}`
+      `https://${this.calendarServer}/api/v1/calendars/${calendarId}/events?${params}`
     );
     
     return (res.events || []).map(evt => this.mapEvent(evt));
@@ -336,7 +336,7 @@ export class ZohoProvider implements IMailProvider, ICalendarProvider, IContacts
 
   async getEvent(calendarId: string, eventId: string): Promise<CalendarEvent> {
     const res = await this.fetchCalendar<{ events?: any[]; event?: any }>(
-      `https://${this.calendarServer}/api/v1/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`
+      `https://${this.calendarServer}/api/v1/calendars/${calendarId}/events/${eventId}`
     );
     return this.mapEvent((res.events && res.events[0]) || res.event || res);
   }
@@ -356,7 +356,7 @@ export class ZohoProvider implements IMailProvider, ICalendarProvider, IContacts
       isallday: event.allDay === true,
       ...(event.attendees?.length ? { attendees: event.attendees.map(a => ({ email: a.address, is_organizer: false })) } : {}),
     };
-    const url = `https://${this.calendarServer}/api/v1/calendars/${encodeURIComponent(calendarId)}/events?eventdata=${encodeURIComponent(JSON.stringify(eventdata))}`;
+    const url = `https://${this.calendarServer}/api/v1/calendars/${calendarId}/events?eventdata=${encodeURIComponent(JSON.stringify(eventdata))}`;
     const res = await this.fetchCalendar<{ events?: any[]; event?: any }>(url, { method: 'POST' });
     return this.mapEvent((res.events || [])[0] || res.event || res);
   }
@@ -379,7 +379,7 @@ export class ZohoProvider implements IMailProvider, ICalendarProvider, IContacts
       },
       isallday: patches.allDay ?? current.allDay,
     };
-    const url = `https://${this.calendarServer}/api/v1/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventdata.eventid)}?eventdata=${encodeURIComponent(JSON.stringify(eventdata))}`;
+    const url = `https://${this.calendarServer}/api/v1/calendars/${calendarId}/events/${eventdata.eventid}?eventdata=${encodeURIComponent(JSON.stringify(eventdata))}`;
     const res = await this.fetchCalendar<{ event?: any; events?: any[] }>(url, { method: 'PUT' });
     return this.mapEvent((res.events || [])[0] || res.event || res);
   }
@@ -389,7 +389,7 @@ export class ZohoProvider implements IMailProvider, ICalendarProvider, IContacts
     const raw: any = current.raw || {};
     const targetId = raw.eventid || raw.eventId || raw.uid || eventId;
     const eventdata = { eventid: targetId, etag: raw.etag };
-    const url = `https://${this.calendarServer}/api/v1/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(targetId)}?eventdata=${encodeURIComponent(JSON.stringify(eventdata))}`;
+    const url = `https://${this.calendarServer}/api/v1/calendars/${calendarId}/events/${targetId}?eventdata=${encodeURIComponent(JSON.stringify(eventdata))}`;
     await this.fetchCalendar(url, { method: 'DELETE' });
   }
 
