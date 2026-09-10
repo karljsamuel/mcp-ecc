@@ -23,9 +23,11 @@ import type {
 export class ZohoProvider implements IMailProvider, ICalendarProvider, IContactsProvider {
   private mailAccountId: string | null = null;
   private accountsServer: string;
+  private calendarServer: string;
 
   constructor(private accountId: string, private credentials: AccountCredentials) {
     this.accountsServer = credentials.config?.accountsServer || 'accounts.zoho.com';
+    this.calendarServer = this.accountsServer.replace(/^accounts\./, 'calendar.');
   }
 
   private async getHeaders(): Promise<Record<string, string>> {
@@ -268,8 +270,8 @@ export class ZohoProvider implements IMailProvider, ICalendarProvider, IContacts
   // --- ICalendarProvider ---
 
   async listCalendars(): Promise<Calendar[]> {
-    const res = await this.fetchZoho<{ calendars: any[] }>(
-      `https://calendar.zoho.com/api/v1/calendars`
+    const res = await this.fetchCalendar<{ calendars: any[] }>(
+      `https://${this.calendarServer}/api/v1/calendars`
     );
     
     return (res.calendars || []).map(cal => ({
@@ -283,6 +285,22 @@ export class ZohoProvider implements IMailProvider, ICalendarProvider, IContacts
       createdAt: 0,
       updatedAt: 0,
     }));
+  }
+
+  private async fetchCalendar<T>(url: string, options: RequestInit = {}): Promise<T> {
+    const servers = [this.calendarServer, 'calendar.zoho.com', 'calendar.zoho.eu', 'calendar.zoho.in', 'calendar.zoho.com.cn', 'calendar.zoho.jp', 'calendar.zoho.com.au']
+      .filter((server, index, list) => list.indexOf(server) === index);
+    let lastError: unknown;
+    for (const server of servers) {
+      const candidate = url.replace(`https://${this.calendarServer}`, `https://${server}`);
+      try {
+        return await this.fetchZoho<T>(candidate, options);
+      } catch (error: any) {
+        lastError = error;
+        if (!String(error?.message || '').includes('Zoho API error: 404')) throw error;
+      }
+    }
+    throw lastError;
   }
 
   private zohoEventTime(d: number): string {
@@ -303,16 +321,16 @@ export class ZohoProvider implements IMailProvider, ICalendarProvider, IContacts
     params.set('range', JSON.stringify({ start: compactDate(min), end: compactDate(boundedMax) }));
     if (options.limit) params.set('limit', String(options.limit));
 
-    const res = await this.fetchZoho<{ events: any[] }>(
-      `https://calendar.zoho.com/api/v1/calendars/${encodeURIComponent(calendarId)}/events?${params}`
+    const res = await this.fetchCalendar<{ events: any[] }>(
+      `https://${this.calendarServer}/api/v1/calendars/${encodeURIComponent(calendarId)}/events?${params}`
     );
     
     return (res.events || []).map(evt => this.mapEvent(evt));
   }
 
   async getEvent(calendarId: string, eventId: string): Promise<CalendarEvent> {
-    const res = await this.fetchZoho<{ events?: any[]; event?: any }>(
-      `https://calendar.zoho.com/api/v1/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`
+    const res = await this.fetchCalendar<{ events?: any[]; event?: any }>(
+      `https://${this.calendarServer}/api/v1/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`
     );
     return this.mapEvent((res.events && res.events[0]) || res.event || res);
   }
@@ -332,8 +350,8 @@ export class ZohoProvider implements IMailProvider, ICalendarProvider, IContacts
       isallday: event.allDay === true,
       attendees: event.attendees?.map(a => ({ email: a.address, is_organizer: false })),
     };
-    const url = `https://calendar.zoho.com/api/v1/calendars/${encodeURIComponent(calendarId)}/events?eventdata=${encodeURIComponent(JSON.stringify(eventdata))}`;
-    const res = await this.fetchZoho<{ events?: any[]; event?: any }>(url, { method: 'POST' });
+    const url = `https://${this.calendarServer}/api/v1/calendars/${encodeURIComponent(calendarId)}/events?eventdata=${encodeURIComponent(JSON.stringify(eventdata))}`;
+    const res = await this.fetchCalendar<{ events?: any[]; event?: any }>(url, { method: 'POST' });
     return this.mapEvent((res.events || [])[0] || res.event || res);
   }
 
@@ -355,8 +373,8 @@ export class ZohoProvider implements IMailProvider, ICalendarProvider, IContacts
       },
       isallday: patches.allDay ?? current.allDay,
     };
-    const url = `https://calendar.zoho.com/api/v1/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventdata.eventid)}?eventdata=${encodeURIComponent(JSON.stringify(eventdata))}`;
-    const res = await this.fetchZoho<{ event?: any; events?: any[] }>(url, { method: 'PUT' });
+    const url = `https://${this.calendarServer}/api/v1/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventdata.eventid)}?eventdata=${encodeURIComponent(JSON.stringify(eventdata))}`;
+    const res = await this.fetchCalendar<{ event?: any; events?: any[] }>(url, { method: 'PUT' });
     return this.mapEvent((res.events || [])[0] || res.event || res);
   }
 
@@ -365,8 +383,8 @@ export class ZohoProvider implements IMailProvider, ICalendarProvider, IContacts
     const raw: any = current.raw || {};
     const targetId = raw.eventid || raw.eventId || raw.uid || eventId;
     const eventdata = { eventid: targetId, etag: raw.etag };
-    const url = `https://calendar.zoho.com/api/v1/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(targetId)}?eventdata=${encodeURIComponent(JSON.stringify(eventdata))}`;
-    await this.fetchZoho(url, { method: 'DELETE' });
+    const url = `https://${this.calendarServer}/api/v1/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(targetId)}?eventdata=${encodeURIComponent(JSON.stringify(eventdata))}`;
+    await this.fetchCalendar(url, { method: 'DELETE' });
   }
 
   async freeBusy(calendarIds: string[], timeMin: number, timeMax: number): Promise<Array<{ calendarId: string; busy: Array<{ start: number; end: number }> }>> {
