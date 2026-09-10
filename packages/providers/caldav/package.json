@@ -1,6 +1,6 @@
 {
   "name": "@mcp-ecc/provider-caldav",
-  "version": "0.5.2",
+  "version": "0.6.0",
   "description": "CalDAV provider for mcp-ecc",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

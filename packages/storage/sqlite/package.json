@@ -1,6 +1,6 @@
 {
   "name": "@mcp-ecc/storage-sqlite",
-  "version": "0.5.2",
+  "version": "0.6.0",
   "description": "SQLite storage adapter for mcp-ecc",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
