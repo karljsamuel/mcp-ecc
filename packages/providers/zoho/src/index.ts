@@ -303,7 +303,7 @@ export class ZohoProvider implements IMailProvider, ICalendarProvider, IContacts
         return await this.fetchZoho<T>(candidate, options);
       } catch (error: any) {
         lastError = error;
-        if (!String(error?.message || '').includes('Zoho API error: 404')) throw error;
+        if (!/Zoho API error: (401|404)/.test(String(error?.message || ''))) throw error;
       }
     }
     throw lastError;
@@ -415,7 +415,7 @@ export class ZohoProvider implements IMailProvider, ICalendarProvider, IContacts
     const res = await this.fetchZoho<{ contact: any }>(
       `https://contacts.zoho.com/api/v1/accounts/self/contacts/${contactId}`
     );
-    return this.mapContact(res.contact || res);
+    return this.mapContact(this.unwrapContact(res));
   }
 
   async createContact(contact: CreateContactInput): Promise<Contact> {
@@ -436,7 +436,7 @@ export class ZohoProvider implements IMailProvider, ICalendarProvider, IContacts
         body: JSON.stringify(payload),
       }
     );
-    return this.mapContact(res.contacts || res);
+    return this.mapContact(this.unwrapContact(res));
   }
 
   async updateContact(contactId: string, patches: UpdateContactInput): Promise<Contact> {
@@ -454,7 +454,7 @@ export class ZohoProvider implements IMailProvider, ICalendarProvider, IContacts
         }}),
       }
     );
-    return this.mapContact(res.contact || res);
+    return this.mapContact(this.unwrapContact(res));
   }
 
   async deleteContact(contactId: string): Promise<void> {
@@ -526,6 +526,14 @@ export class ZohoProvider implements IMailProvider, ICalendarProvider, IContacts
     const normalized = String(value).replace(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})([+-]\d{4})$/, '$1-$2-$3T$4:$5:$6$7');
     const t = Date.parse(normalized);
     return Number.isNaN(t) ? Date.now() : t;
+  }
+
+  private unwrapContact(response: any): any {
+    if (Array.isArray(response?.contacts)) return response.contacts[0] || {};
+    if (response?.contacts && typeof response.contacts === 'object') return response.contacts;
+    if (response?.contact) return Array.isArray(response.contact) ? response.contact[0] || {} : response.contact;
+    if (response?.data) return Array.isArray(response.data) ? response.data[0] || {} : response.data;
+    return response || {};
   }
 
   private mapContact(c: any): Contact {
