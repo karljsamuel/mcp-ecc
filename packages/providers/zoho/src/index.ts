@@ -367,7 +367,6 @@ export class ZohoProvider implements IMailProvider, ICalendarProvider, IContacts
     const startAt = patches.startAt ?? current.startAt;
     const endAt = patches.endAt ?? current.endAt;
     const eventdata = {
-      eventid: raw.eventid || raw.eventId || raw.uid || eventId,
       etag: raw.etag,
       title: patches.summary ?? current.summary,
       description: patches.description ?? current.description,
@@ -379,7 +378,8 @@ export class ZohoProvider implements IMailProvider, ICalendarProvider, IContacts
       },
       isallday: patches.allDay ?? current.allDay,
     };
-    const url = `https://${this.calendarServer}/api/v1/calendars/${calendarId}/events/${eventdata.eventid}?eventdata=${encodeURIComponent(JSON.stringify(eventdata))}`;
+    const targetId = raw.uid || raw.eventid || raw.eventId || eventId;
+    const url = `https://${this.calendarServer}/api/v1/calendars/${calendarId}/events/${targetId}?eventdata=${encodeURIComponent(JSON.stringify(eventdata))}`;
     const res = await this.fetchCalendar<{ event?: any; events?: any[] }>(url, { method: 'PUT' });
     return this.mapEvent((res.events || [])[0] || res.event || res);
   }
@@ -387,10 +387,9 @@ export class ZohoProvider implements IMailProvider, ICalendarProvider, IContacts
   async deleteEvent(calendarId: string, eventId: string): Promise<void> {
     const current = await this.getEvent(calendarId, eventId);
     const raw: any = current.raw || {};
-    const targetId = raw.eventid || raw.eventId || raw.uid || eventId;
-    const eventdata = { eventid: targetId, etag: raw.etag };
-    const url = `https://${this.calendarServer}/api/v1/calendars/${calendarId}/events/${targetId}?eventdata=${encodeURIComponent(JSON.stringify(eventdata))}`;
-    await this.fetchCalendar(url, { method: 'DELETE' });
+    const targetId = raw.uid || raw.eventid || raw.eventId || eventId;
+    const url = `https://${this.calendarServer}/api/v1/calendars/${calendarId}/events/${targetId}`;
+    await this.fetchCalendar(url, { method: 'DELETE', headers: raw.etag ? { etag: String(raw.etag) } : undefined });
   }
 
   async freeBusy(calendarIds: string[], timeMin: number, timeMax: number): Promise<Array<{ calendarId: string; busy: Array<{ start: number; end: number }> }>> {
