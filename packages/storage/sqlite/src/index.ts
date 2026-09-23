@@ -43,17 +43,24 @@ export class SQLiteStorage implements StorageAdapter {
   }
 
   private migrateLegacyEncryption(): void {
-    for (const row of this.db.prepare('SELECT id, credentials FROM accounts').all() as any[]) {
-      if (!row.credentials || isCurrent(row.credentials)) continue;
-      const plaintext = decrypt(row.credentials, this.encryptionKey);
-      this.db.prepare('UPDATE accounts SET credentials = ?, updatedAt = ? WHERE id = ?')
-        .run(encrypt(plaintext, this.encryptionKey), Date.now(), row.id);
-    }
-    for (const row of this.db.prepare('SELECT id, clientSecret FROM oauth_clients').all() as any[]) {
-      if (!row.clientSecret || isCurrent(row.clientSecret)) continue;
-      const plaintext = decrypt(row.clientSecret, this.encryptionKey);
-      this.db.prepare('UPDATE oauth_clients SET clientSecret = ?, updatedAt = ? WHERE id = ?')
-        .run(encrypt(plaintext, this.encryptionKey), Date.now(), row.id);
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      for (const row of this.db.prepare('SELECT id, credentials FROM accounts').all() as any[]) {
+        if (!row.credentials || isCurrent(row.credentials)) continue;
+        const plaintext = decrypt(row.credentials, this.encryptionKey);
+        this.db.prepare('UPDATE accounts SET credentials = ?, updatedAt = ? WHERE id = ?')
+          .run(encrypt(plaintext, this.encryptionKey), Date.now(), row.id);
+      }
+      for (const row of this.db.prepare('SELECT id, clientSecret FROM oauth_clients').all() as any[]) {
+        if (!row.clientSecret || isCurrent(row.clientSecret)) continue;
+        const plaintext = decrypt(row.clientSecret, this.encryptionKey);
+        this.db.prepare('UPDATE oauth_clients SET clientSecret = ?, updatedAt = ? WHERE id = ?')
+          .run(encrypt(plaintext, this.encryptionKey), Date.now(), row.id);
+      }
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw new Error('SQLite encrypted-data migration failed; no legacy values were rewritten', { cause: error });
     }
   }
 

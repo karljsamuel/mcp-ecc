@@ -328,7 +328,7 @@ export class D1Storage implements StorageAdapter {
   async getCredentials(accountId: string): Promise<AccountCredentials | null> {
     const row = await this.db.prepare('SELECT credentials_json FROM accounts WHERE id = ?').bind(accountId).first();
     if (!row) return null;
-    return JSON.parse(await this.decrypt((row as any).credentials_json));
+    return JSON.parse(await this.migrateValue((row as any).credentials_json, 'accounts', 'credentials_json', 'id', accountId));
   }
 
   async saveCredentials(accountId: string, credentials: AccountCredentials): Promise<void> {
