@@ -1,9 +1,11 @@
 name: Publish to npm & MCP Registry
 
-# Manual release. Publish the internal @mcp-ecc/* packages first (in dependency
+# Release publication. Publish the internal @mcp-ecc/* packages first (in dependency
 # order), then @karljsamuel/mcp-ecc. Requires repo secrets NPM_TOKEN (npm) and a
 # one-time `mcp-publisher login github` for the MCP Registry (run locally).
 on:
+  release:
+    types: [published]
   workflow_dispatch:
     inputs:
       version:
@@ -37,7 +39,8 @@ jobs:
       - name: Set version across packages
         id: version
         run: |
-          V="${{ github.event.inputs.version }}"
+          V="${{ github.event_name == 'release' && github.event.release.tag_name || github.event.inputs.version }}"
+          V="${V#v}"
           node -e "const r=require('./package.json');r.version='$V';require('fs').writeFileSync('package.json',JSON.stringify(r,null,2)+'\n')"
           find packages -name package.json -not -path '*/node_modules/*' | while read f; do
             node -e "const p=require('./$f');if(!p.private){p.version='$V';require('fs').writeFileSync('$f',JSON.stringify(p,null,2)+'\n')}"
