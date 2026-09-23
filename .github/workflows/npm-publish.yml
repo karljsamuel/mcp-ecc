@@ -1,8 +1,7 @@
-name: Publish to npm & MCP Registry
+name: Publish to npm
 
 # Release publication. Publish the internal @mcp-ecc/* packages first (in dependency
-# order), then @karljsamuel/mcp-ecc. Requires repo secrets NPM_TOKEN (npm) and a
-# one-time `mcp-publisher login github` for the MCP Registry (run locally).
+# order), then @karljsamuel/mcp-ecc. Requires repository secret NPM_TOKEN.
 on:
   release:
     types: [published]
@@ -12,18 +11,12 @@ on:
         description: 'Semver to publish (e.g. 0.5.1)'
         required: true
         default: '0.6.0'
-      to_mcp_registry:
-        description: 'Also publish to the MCP Registry (needs mcp-publisher)'
-        required: false
-        type: boolean
-        default: true
 
 jobs:
   publish:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
-      id-token: write
+      contents: read
     steps:
       - uses: actions/checkout@v5
 
@@ -78,10 +71,3 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish ./packages/cli --access public
-
-      - name: Publish to MCP Registry
-        if: ${{ github.event.inputs.to_mcp_registry == 'true' }}
-        run: |
-          curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher && sudo mv mcp-publisher /usr/local/bin/
-          mcp-publisher login github-oidc
-          mcp-publisher publish
