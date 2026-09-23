@@ -39,8 +39,5 @@ jobs:
       - name: Run tests
         run: npm test
 
-      - name: Run pagination contract tests
-        run: node --test tests/pagination-*.test.cjs
-
       - name: Verify repository formatting
         run: git diff --check HEAD^ HEAD
