@@ -1,7 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { StorageAdapter, User, Account, OAuthClient, AccountCredentials, SyncState, Settings, EmailMessage, MailFolder, CalendarEvent, Calendar, Contact, OAuthStateData } from '@mcp-ecc/core';
 import { SCHEMA_MIGRATIONS, MIGRATION_LEDGER_SQL, READ_MIGRATIONS_SQL, RECORD_MIGRATION_SQL, migrationColumns } from '@mcp-ecc/core';
-import CryptoJS from 'crypto-js';
+import { decrypt, encrypt, isCurrent } from './crypto.js';
 
 export class SQLiteStorage implements StorageAdapter {
   private db: DatabaseSync;
@@ -39,6 +39,22 @@ export class SQLiteStorage implements StorageAdapter {
         throw new Error(`SQLite schema migration ${migration.version} (${migration.name}) failed`, { cause: error });
       }
     }
+    this.migrateLegacyEncryption();
+  }
+
+  private migrateLegacyEncryption(): void {
+    for (const row of this.db.prepare('SELECT id, credentials FROM accounts').all() as any[]) {
+      if (!row.credentials || isCurrent(row.credentials)) continue;
+      const plaintext = decrypt(row.credentials, this.encryptionKey);
+      this.db.prepare('UPDATE accounts SET credentials = ?, updatedAt = ? WHERE id = ?')
+        .run(encrypt(plaintext, this.encryptionKey), Date.now(), row.id);
+    }
+    for (const row of this.db.prepare('SELECT id, clientSecret FROM oauth_clients').all() as any[]) {
+      if (!row.clientSecret || isCurrent(row.clientSecret)) continue;
+      const plaintext = decrypt(row.clientSecret, this.encryptionKey);
+      this.db.prepare('UPDATE oauth_clients SET clientSecret = ?, updatedAt = ? WHERE id = ?')
+        .run(encrypt(plaintext, this.encryptionKey), Date.now(), row.id);
+    }
   }
 
   private ensureColumn(table: string, column: string, definition: string): void {
@@ -49,14 +65,13 @@ export class SQLiteStorage implements StorageAdapter {
   }
 
   private encrypt(text: string): string {
-    return CryptoJS.AES.encrypt(text, this.encryptionKey).toString();
+    return encrypt(text, this.encryptionKey);
   }
 
   private decrypt(ciphertext: string): string {
     if (!ciphertext) return '';
     try {
-      const bytes = CryptoJS.AES.decrypt(ciphertext, this.encryptionKey);
-      return bytes.toString(CryptoJS.enc.Utf8) || '';
+      return decrypt(ciphertext, this.encryptionKey);
     } catch (e: any) {
       console.warn('[mcp-ecc] Failed to decrypt SQLite data:', e.message);
       return '';

@@ -15,7 +15,7 @@ import type {
 } from '@mcp-ecc/core';
 import { generateId } from '@mcp-ecc/core';
 import { SCHEMA_MIGRATIONS, MIGRATION_LEDGER_SQL, READ_MIGRATIONS_SQL, RECORD_MIGRATION_SQL, migrationColumns } from '@mcp-ecc/core';
-import CryptoJS from 'crypto-js';
+import { decrypt, encrypt, isCurrent } from './crypto.js';
 
 export interface D1Database {
   prepare(query: string): D1PreparedStatement;
@@ -230,39 +230,41 @@ export class D1Storage implements StorageAdapter {
     return result as D1Result<T>;
   }
 
-  private async encrypt(data: string): Promise<string> {
-    return CryptoJS.AES.encrypt(data, this.encryptionKey).toString();
-  }
+  private async encrypt(data: string): Promise<string> { return encrypt(data, this.encryptionKey); }
 
   private async decrypt(encryptedData: string): Promise<string> {
-    if (!encryptedData) return '';
-    try {
-      const bytes = CryptoJS.AES.decrypt(encryptedData, this.encryptionKey);
-      return bytes.toString(CryptoJS.enc.Utf8) || '';
-    } catch (e: any) {
-      console.warn('[mcp-ecc] Failed to decrypt D1 data asynchronously:', e.message);
-      return '';
+    try { return await decrypt(encryptedData, this.encryptionKey); }
+    catch (error) { throw new Error('D1 encrypted value could not be authenticated or migrated', { cause: error }); }
+  }
+
+  private async migrateValue(value: string, table: string, column: string, idColumn: string, id: string): Promise<string> {
+    const plaintext = await this.decrypt(value);
+    if (!isCurrent(value)) {
+      const migrated = await this.encrypt(plaintext);
+      await this.db.prepare(`UPDATE ${table} SET ${column} = ?, updated_at = ? WHERE ${idColumn} = ?`)
+        .bind(migrated, Date.now(), id).run();
     }
+    return plaintext;
   }
 
   // Account management
   async getAccount(id: string): Promise<Account | null> {
     const row = await this.db.prepare('SELECT * FROM accounts WHERE id = ?').bind(id).first();
     if (!row) return null;
-    return this.mapAccount(row as any);
+    return await this.mapAccount(row as any);
   }
 
   async getAccountBySlug(slug: string, ownerId: string): Promise<Account | null> {
     const row = await this.db.prepare('SELECT * FROM accounts WHERE slug = ? AND owner_id = ?').bind(slug, ownerId).first();
     if (!row) return null;
-    return this.mapAccount(row as any);
+    return await this.mapAccount(row as any);
   }
 
   async listAccounts(ownerId?: string): Promise<Account[]> {
     const { results } = ownerId
       ? await this.db.prepare('SELECT * FROM accounts WHERE owner_id = ? ORDER BY name').bind(ownerId).all()
       : await this.db.prepare('SELECT * FROM accounts ORDER BY name').all();
-    return (results as any[]).map(r => this.mapAccount(r));
+    return Promise.all((results as any[]).map(r => this.mapAccount(r)));
   }
 
   async saveAccount(account: Account): Promise<void> {
@@ -476,7 +478,7 @@ export class D1Storage implements StorageAdapter {
     params.push(limit);
 
     const { results } = await this.db.prepare(sql).bind(...params).all();
-    return (results as any[]).map(r => this.mapMailMessage(r));
+    return Promise.all((results as any[]).map(r => this.mapMailMessage(r)));
   }
 
   async saveMailFolders(accountId: string, folders: MailFolder[]): Promise<void> {
@@ -548,7 +550,7 @@ export class D1Storage implements StorageAdapter {
       WHERE account_id = ? AND calendar_id = ? AND end_at >= ? AND start_at <= ?
       ORDER BY start_at ASC
     `).bind(accountId, calendarId, timeMin, timeMax).all();
-    return (results as any[]).map(r => this.mapCalendarEvent(r));
+    return Promise.all((results as any[]).map(r => this.mapCalendarEvent(r)));
   }
 
   async saveCalendars(accountId: string, calendars: Calendar[]): Promise<void> {
@@ -701,20 +703,20 @@ export class D1Storage implements StorageAdapter {
   async getUser(id: string): Promise<User | null> {
     const row = await this.db.prepare('SELECT * FROM users WHERE id = ?').bind(id).first();
     if (!row) return null;
-    return this.mapUser(row as any);
+    return await this.mapUser(row as any);
   }
 
   async getUserByUsername(username: string): Promise<User | null> {
     const row = await this.db.prepare('SELECT * FROM users WHERE username = ?').bind(username).first();
     if (!row) return null;
-    return this.mapUser(row as any);
+    return await this.mapUser(row as any);
   }
 
   async getUserByApiKey(apiKey: string): Promise<User | null> {
     const { results } = await this.db.prepare('SELECT * FROM users').all();
     for (const row of results as any[]) {
       try {
-        if ((await this.decrypt(row.mcp_api_key)) === apiKey) return this.mapUser(row);
+        if ((await this.migrateValue(row.mcp_api_key, 'users', 'mcp_api_key', 'id', row.id)) === apiKey) return await this.mapUser(row);
       } catch { /* skip */ }
     }
     return null;
@@ -722,7 +724,7 @@ export class D1Storage implements StorageAdapter {
 
   async listUsers(): Promise<User[]> {
     const { results } = await this.db.prepare('SELECT * FROM users ORDER BY username').all();
-    return (results as any[]).map(r => this.mapUser(r));
+    return Promise.all((results as any[]).map(r => this.mapUser(r)));
   }
 
   async updateUser(id: string, updates: Partial<User>): Promise<void> {
@@ -748,7 +750,7 @@ export class D1Storage implements StorageAdapter {
   }
 
   // Mapping helpers
-  private mapAccount(row: any): Account {
+  private async mapAccount(row: any): Promise<Account> {
     return {
       id: row.id,
       ownerId: row.owner_id,
@@ -757,33 +759,13 @@ export class D1Storage implements StorageAdapter {
       slug: row.slug,
       email: row.email,
       displayName: row.display_name || undefined,
-      credentials: JSON.parse(this.decryptSync(row.credentials_json)),
+      credentials: JSON.parse(await this.migrateValue(row.credentials_json, 'accounts', 'credentials_json', 'id', row.id)),
       status: row.status,
       health: row.health || 'unknown',
       lastSyncAt: row.last_sync_at || undefined,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };
-  }
-
-  private async decryptWithLegacyFallback(encryptedData: string): Promise<string> {
-    const current = this.decryptSync(encryptedData);
-    if (current) return current;
-
-    // Older D1 builds used WebCrypto AES-GCM with SHA-256-derived key material.
-    // Read that format so existing OAuth secrets remain usable after upgrading.
-    try {
-      const bytes = Uint8Array.from(atob(encryptedData), c => c.charCodeAt(0));
-      const iv = bytes.slice(0, 12);
-      const ciphertext = bytes.slice(12);
-      const material = new TextEncoder().encode(this.encryptionKey);
-      const digest = await crypto.subtle.digest('SHA-256', material);
-      const key = await crypto.subtle.importKey('raw', digest, 'AES-GCM', false, ['decrypt']);
-      const plaintext = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext);
-      return new TextDecoder().decode(plaintext);
-    } catch {
-      return '';
-    }
   }
 
   private async mapOAuthClient(row: any): Promise<OAuthClient> {
@@ -793,7 +775,7 @@ export class D1Storage implements StorageAdapter {
       provider: row.provider,
       label: row.label,
       clientId: row.client_id,
-      clientSecret: await this.decryptWithLegacyFallback(row.client_secret),
+      clientSecret: await this.migrateValue(row.client_secret, 'oauth_clients', 'client_secret', 'id', row.id),
       scopes: JSON.parse(row.scopes_json),
       tenantId: row.tenant_id || undefined,
       accountsServer: row.accounts_server || undefined,
@@ -805,31 +787,20 @@ export class D1Storage implements StorageAdapter {
     };
   }
 
-  private mapUser(row: any): User {
+  private async mapUser(row: any): Promise<User> {
     return {
       id: row.id,
       username: row.username,
       displayName: row.display_name,
       passwordHash: row.password_hash,
       role: row.role,
-      mcpApiKey: this.decryptSync(row.mcp_api_key),
+      mcpApiKey: await this.migrateValue(row.mcp_api_key, 'users', 'mcp_api_key', 'id', row.id),
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };
   }
 
-  private decryptSync(encryptedData: string): string {
-    if (!encryptedData) return '';
-    try {
-      const bytes = CryptoJS.AES.decrypt(encryptedData, this.encryptionKey);
-      return bytes.toString(CryptoJS.enc.Utf8) || '';
-    } catch (e: any) {
-      console.warn('[mcp-ecc] Failed to decrypt D1 data synchronously:', e.message);
-      return '';
-    }
-  }
-
-  private mapMailMessage(row: any): EmailMessage {
+  private async mapMailMessage(row: any): Promise<EmailMessage> {
     return {
       id: row.id,
       threadId: row.thread_id || undefined,
