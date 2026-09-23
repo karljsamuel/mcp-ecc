@@ -38,7 +38,7 @@ jobs:
           V="${V#v}"
           node -e "const r=require('./package.json');r.version='$V';require('fs').writeFileSync('package.json',JSON.stringify(r,null,2)+'\n')"
           find packages -name package.json -not -path '*/node_modules/*' | while read f; do
-            node -e "const p=require('./$f');if(!p.private){p.version='$V';require('fs').writeFileSync('$f',JSON.stringify(p,null,2)+'\n')}"
+            node -e "const fs=require('fs'),path=require('path'),f='$f',p=require('./'+f);if(!p.private){p.version='$V';p.repository={type:'git',url:'https://github.com/karljsamuel/mcp-ecc.git',directory:path.dirname(f)};fs.writeFileSync(f,JSON.stringify(p,null,2)+'\\n')}"
           done
           echo "ver=$V" >> "$GITHUB_OUTPUT"
           if [[ "$V" == *-* ]]; then
