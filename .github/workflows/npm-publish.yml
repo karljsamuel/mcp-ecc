@@ -41,6 +41,11 @@ jobs:
             node -e "const p=require('./$f');if(!p.private){p.version='$V';require('fs').writeFileSync('$f',JSON.stringify(p,null,2)+'\n')}"
           done
           echo "ver=$V" >> "$GITHUB_OUTPUT"
+          if [[ "$V" == *-* ]]; then
+            echo "npm_tag=${V#*-}" >> "$GITHUB_OUTPUT"
+          else
+            echo "npm_tag=latest" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Build all packages
         run: npx turbo run build
@@ -64,8 +69,8 @@ jobs:
             packages/mcp-server \
             packages/management-api; do
             echo "publishing $pkg"
-            npm publish "./$pkg" --access public --provenance
+            npm publish "./$pkg" --access public --provenance --tag "${{ steps.version.outputs.npm_tag }}"
           done
 
       - name: Publish entry package
-        run: npm publish ./packages/cli --access public --provenance
+        run: npm publish ./packages/cli --access public --provenance --tag "${{ steps.version.outputs.npm_tag }}"
