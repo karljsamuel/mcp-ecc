@@ -186,13 +186,19 @@ export interface ContactAddress {
   type?: 'home' | 'work' | 'other';
 }
 
+export interface PaginatedResult<T> {
+  items: T[];
+  nextCursor?: string;
+  total?: number;
+}
+
 // Provider interfaces
 export interface IMailProvider {
   listFolders(): Promise<MailFolder[]>;
-  listMessages(folderId: string, options?: ListMessagesOptions): Promise<EmailMessage[]>;
+  listMessages(folderId: string, options?: ListMessagesOptions): Promise<PaginatedResult<EmailMessage>>;
   getMessage(messageId: string): Promise<EmailMessage>;
   sendMessage(message: SendMessageInput): Promise<EmailMessage>;
-  searchMessages(query: string, options?: SearchOptions): Promise<EmailMessage[]>;
+  searchMessages(query: string, options?: SearchOptions): Promise<PaginatedResult<EmailMessage>>;
   moveMessage(messageId: string, folderId: string): Promise<void>;
   setFlags(messageId: string, addFlags: string[], removeFlags: string[]): Promise<void>;
   deleteMessage(messageId: string, permanent?: boolean): Promise<void>;
@@ -224,7 +230,7 @@ export interface SendMessageInput {
 
 export interface ICalendarProvider {
   listCalendars(): Promise<Calendar[]>;
-  listEvents(calendarId: string, options?: ListEventsOptions): Promise<CalendarEvent[]>;
+  listEvents(calendarId: string, options?: ListEventsOptions): Promise<PaginatedResult<CalendarEvent>>;
   getEvent(calendarId: string, eventId: string): Promise<CalendarEvent>;
   createEvent(calendarId: string, event: CreateEventInput): Promise<CalendarEvent>;
   updateEvent(calendarId: string, eventId: string, patches: UpdateEventInput): Promise<CalendarEvent>;
@@ -268,12 +274,12 @@ export interface FreeBusyResult {
 }
 
 export interface IContactsProvider {
-  listContacts(options?: ListContactsOptions): Promise<Contact[]>;
+  listContacts(options?: ListContactsOptions): Promise<PaginatedResult<Contact>>;
   getContact(contactId: string): Promise<Contact>;
   createContact(contact: CreateContactInput): Promise<Contact>;
   updateContact(contactId: string, patches: UpdateContactInput): Promise<Contact>;
   deleteContact(contactId: string): Promise<void>;
-  searchContacts(query: string, options?: SearchOptions): Promise<Contact[]>;
+  searchContacts(query: string, options?: SearchOptions): Promise<PaginatedResult<Contact>>;
 }
 
 export interface ListContactsOptions {

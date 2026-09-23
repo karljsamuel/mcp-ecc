@@ -80,7 +80,7 @@ export class ImapSmtpProvider implements IMailProvider, ICalendarProvider, ICont
     }
   }
 
-  async listMessages(folderId: string, options: ListMessagesOptions = {}): Promise<EmailMessage[]> {
+  async listMessages(folderId: string, options: ListMessagesOptions = {}): Promise<{ items: EmailMessage[]; nextCursor?: string; total?: number }> {
     const client = await this.connect();
     try {
       await client.mailboxOpen(folderId);
@@ -95,7 +95,9 @@ export class ImapSmtpProvider implements IMailProvider, ICalendarProvider, ICont
 
       const messages = await client.search(search, { uid: true });
       const list = messages || [];
-      const sliced = list.slice(-(options.limit || 50)); // newest last, take tail
+      const offset = options.cursor ? Number(options.cursor) : 0;
+      const pageSize = options.limit || 50;
+      const sliced = list.slice(Math.max(0, list.length - offset - pageSize), list.length - offset).reverse();
 
       const emailMessages: EmailMessage[] = [];
       for (const range of sliced) {
@@ -109,7 +111,7 @@ export class ImapSmtpProvider implements IMailProvider, ICalendarProvider, ICont
         }
       }
 
-      return emailMessages;
+      return { items: emailMessages, nextCursor: offset + sliced.length < list.length ? String(offset + sliced.length) : undefined, total: list.length };
     } finally {
       await client.logout();
     }
@@ -165,7 +167,7 @@ export class ImapSmtpProvider implements IMailProvider, ICalendarProvider, ICont
     };
   }
 
-  async searchMessages(query: string, options: SearchOptions = {}): Promise<EmailMessage[]> {
+  async searchMessages(query: string, options: SearchOptions = {}): Promise<{ items: EmailMessage[]; nextCursor?: string; total?: number }> {
     return this.listMessages('INBOX', { ...options, query });
   }
 
@@ -221,8 +223,8 @@ export class ImapSmtpProvider implements IMailProvider, ICalendarProvider, ICont
     return [];
   }
 
-  async listEvents(): Promise<CalendarEvent[]> {
-    return [];
+  async listEvents(): Promise<{ items: CalendarEvent[] }> {
+    return { items: [] };
   }
 
   async getEvent(): Promise<CalendarEvent> {
@@ -247,8 +249,8 @@ export class ImapSmtpProvider implements IMailProvider, ICalendarProvider, ICont
 
   // --- IContactsProvider (Unsupported) ---
 
-  async listContacts(): Promise<Contact[]> {
-    return [];
+  async listContacts(): Promise<{ items: Contact[] }> {
+    return { items: [] };
   }
 
   async getContact(): Promise<Contact> {
@@ -267,8 +269,8 @@ export class ImapSmtpProvider implements IMailProvider, ICalendarProvider, ICont
     throw new Error('Contacts not supported by IMAP/SMTP provider');
   }
 
-  async searchContacts(): Promise<Contact[]> {
-    return [];
+  async searchContacts(): Promise<{ items: Contact[] }> {
+    return { items: [] };
   }
 
   // --- Helpers ---

@@ -21,7 +21,7 @@
     "dev": "tsc -w",
     "clean": "rm -rf dist .tsbuildinfo",
     "lint": "eslint src --ext .ts",
-    "test": "vitest run"
+    "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
     "@mcp-ecc/core": "file:../core",

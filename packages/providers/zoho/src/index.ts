@@ -18,6 +18,7 @@ import type {
   ListContactsOptions,
   CreateContactInput,
   UpdateContactInput,
+  PaginatedResult,
 } from '@mcp-ecc/core';
 
 export class ZohoProvider implements IMailProvider, ICalendarProvider, IContactsProvider {
@@ -106,11 +107,11 @@ export class ZohoProvider implements IMailProvider, ICalendarProvider, IContacts
 
   async listFolders(): Promise<MailFolder[]> {
     const zuid = await this.getZohoMailAccountId();
-    const res = await this.fetchZoho<{ data: any[] }>(
+    const res = await this.fetchZoho<any>(
       `https://mail.zoho.com/api/v1/accounts/${zuid}/folders`
     );
     
-    return (res.data || []).map(f => ({
+    return (res.data || []).map((f: any) => ({
       id: f.folderId,
       name: f.folderName,
       parentId: f.parentFolderId,
@@ -122,14 +123,15 @@ export class ZohoProvider implements IMailProvider, ICalendarProvider, IContacts
     }));
   }
 
-  async listMessages(folderId: string, options: ListMessagesOptions = {}): Promise<EmailMessage[]> {
+  async listMessages(folderId: string, options: ListMessagesOptions = {}): Promise<PaginatedResult<EmailMessage>> {
     const zuid = await this.getZohoMailAccountId();
     const params = new URLSearchParams();
-    params.set('limit', String(options.limit || 50));
+    params.set('limit', String(Math.min(options.limit || 50, 200)));
+    if (options.cursor) params.set('start', options.cursor);
 
     // Resolve folder name (e.g. "INBOX") to its Zoho folderId, otherwise the
     // view endpoint lists a different default folder.
-    const folders = await this.fetchZoho<{ data: any[] }>(
+    const folders = await this.fetchZoho<any>(
       `https://mail.zoho.com/api/v1/accounts/${zuid}/folders`
     );
     const folder = (folders.data || []).find(
@@ -143,20 +145,22 @@ export class ZohoProvider implements IMailProvider, ICalendarProvider, IContacts
       params.set('searchKey', options.query);
     }
 
-    const res = await this.fetchZoho<{ data: any[] }>(
+    const res = await this.fetchZoho<any>(
       `https://mail.zoho.com/api/v1/accounts/${zuid}/messages/view?${params}`
     );
     
-    return (res.data || []).map(item => this.mapMessage(item));
+    const items = (res.data || []).map((item: any) => this.mapMessage(item));
+    const nextCursor = res.nextPageToken || res.next_cursor || res.page?.next || (items.length === Number(options.limit || 50) ? String(Number(options.cursor || 0) + items.length) : undefined);
+    return { items, nextCursor, total: res.total || undefined };
   }
 
   async getMessage(messageId: string): Promise<EmailMessage> {
     const zuid = await this.getZohoMailAccountId();
-    const folders = await this.fetchZoho<{ data: any[] }>(`https://mail.zoho.com/api/v1/accounts/${zuid}/folders`);
+    const folders = await this.fetchZoho<any>(`https://mail.zoho.com/api/v1/accounts/${zuid}/folders`);
     let meta: any;
     let folderId: string | undefined;
     for (const folder of folders.data || []) {
-      const list = await this.fetchZoho<{ data: any[] }>(`https://mail.zoho.com/api/v1/accounts/${zuid}/messages/view?folderId=${folder.folderId}&limit=100`);
+      const list = await this.fetchZoho<any>(`https://mail.zoho.com/api/v1/accounts/${zuid}/messages/view?folderId=${folder.folderId}&limit=100`);
       meta = (list.data || []).find((item: any) => String(item.messageId) === String(messageId));
       if (meta) { folderId = String(folder.folderId); break; }
     }
@@ -173,7 +177,7 @@ export class ZohoProvider implements IMailProvider, ICalendarProvider, IContacts
   async sendMessage(message: SendMessageInput): Promise<EmailMessage> {
     const zuid = await this.getZohoMailAccountId();
     // From address must be the authenticated mailbox address (not an alias).
-    const accounts = await this.fetchZoho<{ data: any[] }>('https://mail.zoho.com/api/v1/accounts');
+    const accounts = await this.fetchZoho<any>('https://mail.zoho.com/api/v1/accounts');
     const fromAddress = accounts.data?.[0]?.mailboxAddress || accounts.data?.[0]?.emailAddress || this.accountId;
 
     const body: Record<string, any> = {
@@ -208,7 +212,7 @@ export class ZohoProvider implements IMailProvider, ICalendarProvider, IContacts
     };
   }
 
-  async searchMessages(query: string, options: SearchOptions = {}): Promise<EmailMessage[]> {
+  async searchMessages(query: string, options: SearchOptions = {}): Promise<PaginatedResult<EmailMessage>> {
     return this.listMessages('inbox', { ...options, query });
   }
 
@@ -245,7 +249,7 @@ export class ZohoProvider implements IMailProvider, ICalendarProvider, IContacts
   async deleteMessage(messageId: string, permanent = false): Promise<void> {
     const zuid = await this.getZohoMailAccountId();
     // Zoho delete requires the containing folderId — resolve INBOX.
-    const folders = await this.fetchZoho<{ data: any[] }>(
+    const folders = await this.fetchZoho<any>(
       `https://mail.zoho.com/api/v1/accounts/${zuid}/folders`
     );
     const inbox = (folders.data || []).find((f: any) => f.folderName?.toLowerCase() === 'inbox');
@@ -298,7 +302,7 @@ export class ZohoProvider implements IMailProvider, ICalendarProvider, IContacts
     return s.slice(0,4) + s.slice(5,7) + s.slice(8,10) + 'T' + s.slice(11,13) + s.slice(14,16) + s.slice(17,19) + 'Z';
   }
 
-  async listEvents(calendarId: string, options: ListEventsOptions = {}): Promise<CalendarEvent[]> {
+  async listEvents(calendarId: string, options: ListEventsOptions = {}): Promise<PaginatedResult<CalendarEvent>> {
     // Zoho requires a JSON `range` parameter and rejects ranges over 31 days.
     const min = options.timeMin ?? Date.now();
     const max = options.timeMax ?? (min + 30 * 86400000);
@@ -309,13 +313,16 @@ export class ZohoProvider implements IMailProvider, ICalendarProvider, IContacts
     };
     const params = new URLSearchParams();
     params.set('range', JSON.stringify({ start: compactDate(min), end: compactDate(boundedMax) }));
-    if (options.limit) params.set('limit', String(options.limit));
+    if (options.limit) params.set('limit', String(Math.min(options.limit, 200)));
+    if (options.cursor) params.set('start', options.cursor);
 
-    const res = await this.fetchCalendar<{ events: any[] }>(
+    const res = await this.fetchCalendar<any>(
       `https://${this.calendarServer}/api/v1/calendars/${calendarId}/events?${params}`
     );
     
-    return (res.events || []).map(evt => this.mapEvent(evt));
+    const items = (res.events || []).map((evt: any) => this.mapEvent(evt));
+    const nextCursor = res.nextPageToken || res.next_cursor || res.page?.next || (options.limit && items.length === options.limit ? String(Number(options.cursor || 0) + items.length) : undefined);
+    return { items, nextCursor, total: res.total || undefined };
   }
 
   async getEvent(calendarId: string, eventId: string): Promise<CalendarEvent> {
@@ -400,15 +407,17 @@ export class ZohoProvider implements IMailProvider, ICalendarProvider, IContacts
 
   // --- IContactsProvider ---
 
-  async listContacts(options: ListContactsOptions = {}): Promise<Contact[]> {
+  async listContacts(options: ListContactsOptions = {}): Promise<PaginatedResult<Contact>> {
     const params = new URLSearchParams();
-    if (options.limit) params.set('limit', String(options.limit));
+    if (options.limit) params.set('limit', String(Math.min(options.limit, 200)));
+    if (options.cursor) params.set('start', options.cursor);
 
-    const res = await this.fetchZoho<{ contacts: any[] }>(
+    const res = await this.fetchZoho<any>(
       `https://contacts.zoho.com/api/v1/accounts/self/contacts?${params}`
     );
-    
-    return (res.contacts || []).map(c => this.mapContact(c));
+    const items = (res.contacts || []).map((c: any) => this.mapContact(c));
+    const nextCursor = res.nextPageToken || res.next_cursor || res.page?.next || (options.limit && items.length === options.limit ? String(Number(options.cursor || 0) + items.length) : undefined);
+    return { items, nextCursor, total: res.total || undefined };
   }
 
   async getContact(contactId: string): Promise<Contact> {
@@ -464,15 +473,18 @@ export class ZohoProvider implements IMailProvider, ICalendarProvider, IContacts
     );
   }
 
-  async searchContacts(query: string, options: SearchOptions = {}): Promise<Contact[]> {
+  async searchContacts(query: string, options: SearchOptions = {}): Promise<PaginatedResult<Contact>> {
     const params = new URLSearchParams();
     params.set('searchKey', query);
-    if (options.limit) params.set('limit', String(options.limit));
+    if (options.limit) params.set('limit', String(Math.min(options.limit, 200)));
+    if (options.cursor) params.set('start', options.cursor);
 
-    const res = await this.fetchZoho<{ contacts: any[] }>(
+    const res = await this.fetchZoho<any>(
       `https://contacts.zoho.com/api/v1/accounts/self/contacts?${params}`
     );
-    return (res.contacts || []).map(c => this.mapContact(c));
+    const items = (res.contacts || []).map((c: any) => this.mapContact(c));
+    const nextCursor = res.nextPageToken || res.next_cursor || res.page?.next || (options.limit && items.length === options.limit ? String(Number(options.cursor || 0) + items.length) : undefined);
+    return { items, nextCursor, total: res.total || undefined };
   }
 
   // --- Helpers ---

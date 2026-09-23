@@ -21,6 +21,7 @@ import type {
   ListContactsOptions,
   CreateContactInput,
   UpdateContactInput,
+  PaginatedResult,
 } from '@mcp-ecc/core';
 
 export class GoogleProvider implements IMailProvider, ICalendarProvider, IContactsProvider {
@@ -90,7 +91,7 @@ export class GoogleProvider implements IMailProvider, ICalendarProvider, IContac
     return [...systemFolders, ...customFolders];
   }
 
-  async listMessages(folderId: string, options: ListMessagesOptions = {}): Promise<EmailMessage[]> {
+  async listMessages(folderId: string, options: ListMessagesOptions = {}): Promise<PaginatedResult<EmailMessage>> {
     await this.ensureFreshToken();
 
     let q = options.query || '';
@@ -101,12 +102,12 @@ export class GoogleProvider implements IMailProvider, ICalendarProvider, IContac
 
     const res = await this.gmail.users.messages.list({
       userId: 'me',
-      maxResults: options.limit || 50,
+      maxResults: Math.min(options.limit || 50, 500),
       q: q.trim() || undefined,
       pageToken: options.cursor,
     });
 
-    if (!res.data.messages) return [];
+    if (!res.data.messages) return { items: [], nextCursor: undefined, total: res.data.resultSizeEstimate || undefined };
 
     const messages: EmailMessage[] = [];
     for (const msg of res.data.messages) {
@@ -120,7 +121,7 @@ export class GoogleProvider implements IMailProvider, ICalendarProvider, IContac
       }
     }
 
-    return messages;
+    return { items: messages, nextCursor: res.data.nextPageToken || undefined, total: res.data.resultSizeEstimate || undefined };
   }
 
   async getMessage(messageId: string): Promise<EmailMessage> {
@@ -261,7 +262,7 @@ export class GoogleProvider implements IMailProvider, ICalendarProvider, IContac
     return this.getMessage(res.data.id!);
   }
 
-  async searchMessages(query: string, options: SearchOptions = {}): Promise<EmailMessage[]> {
+  async searchMessages(query: string, options: SearchOptions = {}): Promise<PaginatedResult<EmailMessage>> {
     return this.listMessages('ALL', { ...options, query });
   }
 
@@ -327,13 +328,13 @@ export class GoogleProvider implements IMailProvider, ICalendarProvider, IContac
     }));
   }
 
-  async listEvents(calendarId: string, options: ListEventsOptions = {}): Promise<CalendarEvent[]> {
+  async listEvents(calendarId: string, options: ListEventsOptions = {}): Promise<PaginatedResult<CalendarEvent>> {
     await this.ensureFreshToken();
     const res = await this.calendar.events.list({
       calendarId: calendarId === 'primary' ? 'primary' : calendarId,
-      timeMin: options.timeMin ? new Date(options.timeMin).toISOString() : new Date().toISOString(),
+      timeMin: options.timeMin ? new Date(options.timeMin).toISOString() : undefined,
       timeMax: options.timeMax ? new Date(options.timeMax).toISOString() : undefined,
-      maxResults: options.limit || 100,
+      maxResults: Math.min(options.limit || 100, 2500),
       singleEvents: true,
       orderBy: 'startTime',
       pageToken: options.cursor,
@@ -341,7 +342,7 @@ export class GoogleProvider implements IMailProvider, ICalendarProvider, IContac
     });
 
     const items = res.data.items || [];
-    return items.map(evt => this.mapEvent(evt));
+    return { items: items.map((evt: any) => this.mapEvent(evt)), nextCursor: res.data.nextPageToken || undefined };
   }
 
   async getEvent(calendarId: string, eventId: string): Promise<CalendarEvent> {
@@ -422,17 +423,17 @@ export class GoogleProvider implements IMailProvider, ICalendarProvider, IContac
 
   // --- IContactsProvider ---
 
-  async listContacts(options: ListContactsOptions = {}): Promise<Contact[]> {
+  async listContacts(options: ListContactsOptions = {}): Promise<PaginatedResult<Contact>> {
     await this.ensureFreshToken();
     const res = await this.people.people.connections.list({
       resourceName: 'people/me',
-      pageSize: options.limit || 100,
+      pageSize: Math.min(options.limit || 100, 1000),
       personFields: 'names,emailAddresses,phoneNumbers,organizations,photos,biographies',
       pageToken: options.cursor,
     });
 
     const connections = res.data.connections || [];
-    return connections.map(person => this.mapContact(person));
+    return { items: connections.map(person => this.mapContact(person)), nextCursor: res.data.nextPageToken || undefined, total: res.data.totalItems || undefined };
   }
 
   async getContact(contactId: string): Promise<Contact> {
@@ -483,15 +484,16 @@ export class GoogleProvider implements IMailProvider, ICalendarProvider, IContac
     await this.people.people.deleteContact({ resourceName: contactId });
   }
 
-  async searchContacts(query: string, options: SearchOptions = {}): Promise<Contact[]> {
+  async searchContacts(query: string, options: SearchOptions = {}): Promise<PaginatedResult<Contact>> {
     await this.ensureFreshToken();
-    const res = await this.people.people.searchContacts({
+    const res: any = await (this.people.people.searchContacts as any)({
       query,
-      pageSize: options.limit || 50,
+      pageSize: Math.min(options.limit || 50, 100),
       readMask: 'names,emailAddresses,phoneNumbers,organizations',
+      pageToken: options.cursor,
     });
     const results = res.data.results || [];
-    return results.map(r => this.mapContact(r.person!));
+    return { items: results.map((r: any) => this.mapContact(r.person!)), nextCursor: res.data.nextPageToken || undefined, total: res.data.totalItems || undefined };
   }
 
   // --- Helpers ---

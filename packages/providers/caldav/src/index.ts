@@ -8,6 +8,7 @@ import type {
   ListEventsOptions,
   CreateEventInput,
   UpdateEventInput,
+  PaginatedResult,
 } from '@mcp-ecc/core';
 
 // Minimal ICS escaping helpers (RFC 5545)
@@ -160,7 +161,7 @@ export class CalDAVProvider implements ICalendarProvider {
     }));
   }
 
-  async listEvents(calendarId: string, options: ListEventsOptions = {}): Promise<CalendarEvent[]> {
+  async listEvents(calendarId: string, options: ListEventsOptions = {}): Promise<PaginatedResult<CalendarEvent>> {
     const client = await this.getClient();
     // List .ics objects in the calendar via PROPFIND (tsdav's
     // fetchCalendarObjects fails without auth headers).
@@ -187,7 +188,9 @@ export class CalDAVProvider implements ICalendarProvider {
       }
     }
     events.sort((a, b) => a.startAt - b.startAt);
-    return options.limit ? events.slice(0, options.limit) : events;
+    const offset = options.cursor ? Number(options.cursor) : 0;
+    const items = options.limit ? events.slice(offset, offset + options.limit) : events.slice(offset);
+    return { items, nextCursor: offset + items.length < events.length ? String(offset + items.length) : undefined, total: events.length };
   }
 
   private async fetchObject(calendarId: string, href: string): Promise<string | null> {
@@ -206,8 +209,8 @@ export class CalDAVProvider implements ICalendarProvider {
   }
 
   async getEvent(calendarId: string, eventId: string): Promise<CalendarEvent> {
-    const events = await this.listEvents(calendarId);
-    const ev = events.find(e => e.id === eventId);
+    const events = (await this.listEvents(calendarId)).items;
+    const ev = events.find((e: CalendarEvent) => e.id === eventId);
     if (!ev) throw new Error(`Event not found: ${eventId}`);
     return ev;
   }
@@ -264,10 +267,10 @@ export class CalDAVProvider implements ICalendarProvider {
   async freeBusy(calendarIds: string[], timeMin: number, timeMax: number): Promise<Array<{ calendarId: string; busy: Array<{ start: number; end: number }> }>> {
     const results = [];
     for (const calendarId of calendarIds) {
-      const events = await this.listEvents(calendarId, { timeMin, timeMax });
+      const events = (await this.listEvents(calendarId, { timeMin, timeMax })).items;
       results.push({
         calendarId,
-        busy: events.map(e => ({ start: e.startAt, end: e.endAt })),
+        busy: events.map((e: any) => ({ start: e.startAt, end: e.endAt })),
       });
     }
     return results;
