@@ -1,7 +1,8 @@
 name: Publish to npm
 
 # Release publication. Publish the internal @mcp-ecc/* packages first (in dependency
-# order), then @karljsamuel/mcp-ecc. Requires repository secret NPM_TOKEN.
+# order), then mcp-ecc. Authentication uses npm Trusted Publishing via GitHub
+# Actions OIDC; no npm token is stored or required.
 on:
   release:
     types: [published]
@@ -17,6 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v5
 
@@ -47,8 +49,6 @@ jobs:
         run: node scripts/rewrite-file-deps.mjs
 
       - name: Publish internal @mcp-ecc packages
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -e
           for pkg in \
@@ -64,10 +64,8 @@ jobs:
             packages/mcp-server \
             packages/management-api; do
             echo "publishing $pkg"
-            npm publish "./$pkg" --access public
+            npm publish "./$pkg" --access public --provenance
           done
 
       - name: Publish entry package
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish ./packages/cli --access public
+        run: npm publish ./packages/cli --access public --provenance
