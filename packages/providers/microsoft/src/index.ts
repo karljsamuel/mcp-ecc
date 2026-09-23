@@ -20,6 +20,7 @@ import type {
   ListContactsOptions,
   CreateContactInput,
   UpdateContactInput,
+  PaginatedResult,
 } from '@mcp-ecc/core';
 
 export class MicrosoftProvider implements IMailProvider, ICalendarProvider, IContactsProvider {
@@ -96,11 +97,22 @@ export class MicrosoftProvider implements IMailProvider, ICalendarProvider, ICon
     return JSON.parse(text) as T;
   }
 
+  private graphCursor(cursor?: string): string | undefined {
+    if (!cursor) return undefined;
+    const decoded = Buffer.from(cursor, 'base64url').toString('utf8');
+    const url = new URL(decoded);
+    return `${url.pathname}${url.search}`;
+  }
+
+  private graphNextCursor(nextLink?: string): string | undefined {
+    return nextLink ? Buffer.from(nextLink, 'utf8').toString('base64url') : undefined;
+  }
+
   // --- IMailProvider ---
 
   async listFolders(): Promise<MailFolder[]> {
-    const res = await this.fetchGraph<{ value: any[] }>('/me/mailFolders');
-    return (res.value || []).map(f => ({
+    const res = await this.fetchGraph<any>('/me/mailFolders');
+    return (res.value || []).map((f: any) => ({
       id: f.id,
       name: f.displayName,
       parentId: f.parentFolderId,
@@ -112,24 +124,21 @@ export class MicrosoftProvider implements IMailProvider, ICalendarProvider, ICon
     }));
   }
 
-  async listMessages(folderId: string, options: ListMessagesOptions = {}): Promise<EmailMessage[]> {
+  async listMessages(folderId: string, options: ListMessagesOptions = {}): Promise<PaginatedResult<EmailMessage>> {
     let url = folderId === 'ALL' 
       ? '/me/messages'
       : `/me/mailFolders/${folderId}/messages`;
 
     const params = new URLSearchParams();
-    params.set('$top', String(options.limit || 50));
+    params.set('$top', String(Math.min(options.limit || 50, 1000)));
     params.set('$select', 'id,subject,bodyPreview,from,toRecipients,ccRecipients,bccRecipients,receivedDateTime,isRead,categories,hasAttachments,importance,conversationId');
     
     if (options.query) {
       params.set('$search', `"${options.query}"`);
     }
-    if (options.cursor) {
-      params.set('$skip', options.cursor);
-    }
-
-    const res = await this.fetchGraph<{ value: any[]; '@odata.nextLink'?: string }>(`${url}?${params}`);
-    return (res.value || []).map(item => this.mapMessage(item));
+    const requestUrl = this.graphCursor(options.cursor) || `${url}?${params}`;
+    const res = await this.fetchGraph<{ value: any[]; '@odata.nextLink'?: string }>(requestUrl);
+    return { items: (res.value || []).map(item => this.mapMessage(item)), nextCursor: this.graphNextCursor(res['@odata.nextLink']) };
   }
 
   async getMessage(messageId: string): Promise<EmailMessage> {
@@ -178,7 +187,7 @@ export class MicrosoftProvider implements IMailProvider, ICalendarProvider, ICon
     };
   }
 
-  async searchMessages(query: string, options: SearchOptions = {}): Promise<EmailMessage[]> {
+  async searchMessages(query: string, options: SearchOptions = {}): Promise<PaginatedResult<EmailMessage>> {
     return this.listMessages('ALL', { ...options, query });
   }
 
@@ -220,8 +229,8 @@ export class MicrosoftProvider implements IMailProvider, ICalendarProvider, ICon
   // --- ICalendarProvider ---
 
   async listCalendars(): Promise<Calendar[]> {
-    const res = await this.fetchGraph<{ value: any[] }>('/me/calendars');
-    return (res.value || []).map(cal => ({
+    const res = await this.fetchGraph<any>('/me/calendars');
+    return (res.value || []).map((cal: any) => ({
       id: cal.id,
       name: cal.name,
       description: undefined,
@@ -233,9 +242,9 @@ export class MicrosoftProvider implements IMailProvider, ICalendarProvider, ICon
     }));
   }
 
-  async listEvents(calendarId: string, options: ListEventsOptions = {}): Promise<CalendarEvent[]> {
+  async listEvents(calendarId: string, options: ListEventsOptions = {}): Promise<PaginatedResult<CalendarEvent>> {
     const params = new URLSearchParams();
-    params.set('$top', String(options.limit || 100));
+    params.set('$top', String(Math.min(options.limit || 100, 1000)));
     params.set('$orderby', 'start/dateTime');
     
     if (options.timeMin) {
@@ -248,8 +257,9 @@ export class MicrosoftProvider implements IMailProvider, ICalendarProvider, ICon
       params.set('$search', `"${options.query}"`);
     }
 
-    const res = await this.fetchGraph<{ value: any[] }>(`/me/calendars/${calendarId}/events?${params}`);
-    return (res.value || []).map(evt => this.mapEvent(evt));
+    const requestUrl = this.graphCursor(options.cursor) || `/me/calendars/${calendarId}/events?${params}`;
+    const res = await this.fetchGraph<any>(requestUrl);
+    return { items: (res.value || []).map((evt: any) => this.mapEvent(evt)), nextCursor: this.graphNextCursor(res['@odata.nextLink']) };
   }
 
   async getEvent(calendarId: string, eventId: string): Promise<CalendarEvent> {
@@ -325,14 +335,13 @@ export class MicrosoftProvider implements IMailProvider, ICalendarProvider, ICon
 
   // --- IContactsProvider ---
 
-  async listContacts(options: ListContactsOptions = {}): Promise<Contact[]> {
+  async listContacts(options: ListContactsOptions = {}): Promise<PaginatedResult<Contact>> {
     const params = new URLSearchParams();
-    params.set('$top', String(options.limit || 100));
+    params.set('$top', String(Math.min(options.limit || 100, 1000)));
     params.set('$select', 'id,displayName,emailAddresses,businessPhones,homePhones,mobilePhone,companyName,jobTitle,personalNotes');
-    if (options.cursor) params.set('$skip', options.cursor);
-
-    const res = await this.fetchGraph<{ value: any[] }>(`/me/contacts?${params}`);
-    return (res.value || []).map(c => this.mapContact(c));
+    const requestUrl = this.graphCursor(options.cursor) || `/me/contacts?${params}`;
+    const res = await this.fetchGraph<any>(requestUrl);
+    return { items: (res.value || []).map((c: any) => this.mapContact(c)), nextCursor: this.graphNextCursor(res['@odata.nextLink']) };
   }
 
   async getContact(contactId: string): Promise<Contact> {
@@ -389,14 +398,15 @@ export class MicrosoftProvider implements IMailProvider, ICalendarProvider, ICon
     await this.fetchGraph(`/me/contacts/${contactId}`, { method: 'DELETE' });
   }
 
-  async searchContacts(query: string, options: SearchOptions = {}): Promise<Contact[]> {
+  async searchContacts(query: string, options: SearchOptions = {}): Promise<PaginatedResult<Contact>> {
     const params = new URLSearchParams();
-    params.set('$top', String(options.limit || 50));
+    params.set('$top', String(Math.min(options.limit || 50, 1000)));
     params.set('$search', `"${query}"`);
     params.set('$select', 'id,displayName,emailAddresses,businessPhones,homePhones,mobilePhone,companyName,jobTitle,personalNotes');
 
-    const res = await this.fetchGraph<{ value: any[] }>(`/me/contacts?${params}`);
-    return (res.value || []).map(c => this.mapContact(c));
+    const requestUrl = this.graphCursor(options.cursor) || `/me/contacts?${params}`;
+    const res = await this.fetchGraph<any>(requestUrl);
+    return { items: (res.value || []).map((c: any) => this.mapContact(c)), nextCursor: this.graphNextCursor(res['@odata.nextLink']) };
   }
 
   // --- Helpers ---

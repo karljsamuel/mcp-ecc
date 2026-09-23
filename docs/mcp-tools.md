@@ -38,8 +38,9 @@ Available for Google, Microsoft, Zoho and IMAP/SMTP. Not for CalDAV/CardDAV-only
 *Output:* folders with `{ id, name, type, unreadCount, totalCount }`
 
 ### `mail.listMessages`
-*Input:* `{ "accountId": "...", "folderId": "INBOX", "limit": 20, "query": "optional" }`
-*Output:* message envelopes (subject, from, snippet, date, flags, id)
+*Input:* `{ "accountId": "...", "folderId": "INBOX", "limit": 20, "cursor": "optional", "query": "optional" }`
+*Output:* `{ "items": [message envelopes], "nextCursor": "optional", "total": "optional" }`.
+Pass `nextCursor` into the next request's `cursor` to retrieve subsequent pages.
 
 ### `mail.getMessage`
 *Input:* `{ "accountId": "...", "messageId": "..." }`
@@ -49,7 +50,8 @@ Available for Google, Microsoft, Zoho and IMAP/SMTP. Not for CalDAV/CardDAV-only
 *Input:* `{ "accountId": "...", "to": [{"address": "..."}], "subject": "...", "body": "...", "cc": [], "bcc": [], "htmlBody": "...", "inReplyTo": "..." }`
 
 ### `mail.searchMessages`
-*Input:* `{ "accountId": "...", "query": "...", "limit": 20 }`
+*Input:* `{ "accountId": "...", "query": "...", "limit": 20, "cursor": "optional" }`
+*Output:* `{ "items": [message envelopes], "nextCursor": "optional", "total": "optional" }`.
 
 ### `mail.moveMessage`
 *Input:* `{ "accountId": "...", "messageId": "...", "folderId": "..." }`
@@ -70,8 +72,9 @@ Available for Google, Microsoft, Zoho and CalDAV. Not for IMAP/SMTP/CardDAV-only
 *Input:* `{ "accountId": "..." }`
 
 ### `calendar.listEvents`
-*Input:* `{ "accountId": "...", "calendarId": "primary", "timeMin": 1700000000000, "timeMax": 1705000000000, "limit": 100 }`
-Times are epoch **milliseconds**.
+*Input:* `{ "accountId": "...", "calendarId": "primary", "timeMin": 1700000000000, "timeMax": 1705000000000, "limit": 100, "cursor": "optional" }`
+*Times are epoch **milliseconds**.
+*Output:* `{ "items": [events], "nextCursor": "optional", "total": "optional" }`.
 
 ### `calendar.getEvent`
 *Input:* `{ "accountId": "...", "calendarId": "...", "eventId": "..." }`
@@ -95,7 +98,8 @@ Available for Google, Microsoft, Zoho and CardDAV.
 > **CalDAV/CardDAV tested platform:** these providers implement standard WebDAV (CalDAV RFC 4791, CardDAV RFC 6352) with Basic auth and were **tested against Radicale 3.7.8**. They should work with any standards-compliant server (Nextcloud, Baikal, DAViCal, etc.); OAuth-only providers are not supported.
 
 ### `contacts.list`
-*Input:* `{ "accountId": "...", "limit": 100, "cursor": "" }`
+*Input:* `{ "accountId": "...", "limit": 100, "cursor": "optional" }`
+*Output:* `{ "items": [contacts], "nextCursor": "optional", "total": "optional" }`.
 
 ### `contacts.get`
 *Input:* `{ "accountId": "...", "contactId": "..." }`
@@ -110,7 +114,8 @@ Available for Google, Microsoft, Zoho and CardDAV.
 *Input:* `{ "accountId": "...", "contactId": "..." }`
 
 ### `contacts.search`
-*Input:* `{ "accountId": "...", "query": "...", "limit": 50 }`
+*Input:* `{ "accountId": "...", "query": "...", "limit": 50, "cursor": "optional" }`
+*Output:* `{ "items": [contacts], "nextCursor": "optional", "total": "optional" }`.
 
 ## Resources
 

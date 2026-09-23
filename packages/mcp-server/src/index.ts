@@ -199,10 +199,12 @@ export class McpEccServer {
         const endOfDay = new Date();
         endOfDay.setHours(23, 59, 59, 999);
 
-        const [events, messages] = await Promise.all([
+        const [eventsPage, messagesPage] = await Promise.all([
           providers.calendar.listEvents('primary', { timeMin: startOfDay.getTime(), timeMax: endOfDay.getTime() }),
-          providers.mail.listMessages('INBOX', { limit: 10 }).catch(() => []),
+          providers.mail.listMessages('INBOX', { limit: 10 }).catch(() => ({ items: [] })),
         ]);
+        const events = eventsPage.items;
+        const messages = messagesPage.items;
 
         let markdown = `# Agenda and Overview for ${account.name}\n\n`;
         markdown += `## Today's Events (${new Date().toDateString()})\n`;
@@ -253,7 +255,8 @@ export class McpEccServer {
 
       if (resourcePath === 'contacts') {
         if (!providers.contacts) throw new Error('Contacts not supported for this account');
-        const contacts = await providers.contacts.listContacts({ limit: 100 });
+        const contactsPage = await providers.contacts.listContacts({ limit: 100 });
+        const contacts = contactsPage.items;
         return {
           contents: [{ uri, mimeType: 'application/json', text: JSON.stringify(contacts, null, 2) }],
         };
@@ -322,7 +325,8 @@ export class McpEccServer {
               accountId: { type: 'string' }, 
               folderId: { type: 'string' }, 
               limit: { type: 'number' }, 
-              query: { type: 'string' } 
+              query: { type: 'string' },
+              cursor: { type: 'string' }
             }, 
             required: ['accountId', 'folderId'] 
           },
@@ -353,7 +357,7 @@ export class McpEccServer {
         {
           name: 'mail.searchMessages',
           description: 'Search messages',
-          inputSchema: { type: 'object', properties: { accountId: { type: 'string' }, query: { type: 'string' }, limit: { type: 'number' } }, required: ['accountId', 'query'] },
+          inputSchema: { type: 'object', properties: { accountId: { type: 'string' }, query: { type: 'string' }, limit: { type: 'number' }, cursor: { type: 'string' } }, required: ['accountId', 'query'] },
         },
         {
           name: 'mail.moveMessage',
@@ -387,7 +391,8 @@ export class McpEccServer {
               calendarId: { type: 'string' }, 
               timeMin: { type: 'number' }, 
               timeMax: { type: 'number' }, 
-              limit: { type: 'number' } 
+              limit: { type: 'number' },
+              cursor: { type: 'string' }
             }, 
             required: ['accountId', 'calendarId'] 
           },
@@ -502,7 +507,7 @@ export class McpEccServer {
         {
           name: 'contacts.search',
           description: 'Search contacts',
-          inputSchema: { type: 'object', properties: { accountId: { type: 'string' }, query: { type: 'string' }, limit: { type: 'number' } }, required: ['accountId', 'query'] },
+          inputSchema: { type: 'object', properties: { accountId: { type: 'string' }, query: { type: 'string' }, limit: { type: 'number' }, cursor: { type: 'string' } }, required: ['accountId', 'query'] },
         },
       ];
 
@@ -549,10 +554,16 @@ export class McpEccServer {
               const folders = await providers.mail.listFolders();
               await this.storage.saveMailFolders(account.id, folders);
               let count = 0;
-              for (const folder of folders.slice(0, 20)) {
-                const messages = await providers.mail.listMessages(folder.id, { limit: 50 });
-                await this.storage.saveMailMessages(account.id, messages);
-                count += messages.length;
+              for (const folder of folders) {
+                let cursor: string | undefined;
+                do {
+                  const page = await providers.mail.listMessages(folder.id, { limit: 50, cursor });
+                  await this.storage.saveMailMessages(account.id, page.items);
+                  count += page.items.length;
+                  const next = page.nextCursor;
+                  if (!next || next === cursor) break;
+                  cursor = next;
+                } while (cursor);
               }
               synced.mail = count;
             } catch (error: any) { errors.mail = error?.message || String(error); }
@@ -566,9 +577,15 @@ export class McpEccServer {
               const max = Date.now() + 90 * 86400000;
               let count = 0;
               for (const calendar of calendars) {
-                const events = await providers.calendar.listEvents(calendar.id, { timeMin: min, timeMax: max, limit: 200 });
-                await this.storage.saveCalendarEvents(account.id, calendar.id, events);
-                count += events.length;
+                let cursor: string | undefined;
+                do {
+                  const page = await providers.calendar.listEvents(calendar.id, { timeMin: min, timeMax: max, limit: 200, cursor });
+                  await this.storage.saveCalendarEvents(account.id, calendar.id, page.items);
+                  count += page.items.length;
+                  const next = page.nextCursor;
+                  if (!next || next === cursor) break;
+                  cursor = next;
+                } while (cursor);
               }
               synced.calendar = count;
             } catch (error: any) { errors.calendar = error?.message || String(error); }
@@ -576,9 +593,17 @@ export class McpEccServer {
 
           if (types.includes('contacts') && providers.contacts) {
             try {
-              const contacts = await providers.contacts.listContacts({ limit: 200 });
-              await this.storage.saveContacts(account.id, contacts);
-              synced.contacts = contacts.length;
+              let cursor: string | undefined;
+              let count = 0;
+              do {
+                const page = await providers.contacts.listContacts({ limit: 200, cursor });
+                await this.storage.saveContacts(account.id, page.items);
+                count += page.items.length;
+                const next = page.nextCursor;
+                if (!next || next === cursor) break;
+                cursor = next;
+              } while (cursor);
+              synced.contacts = count;
             } catch (error: any) { errors.contacts = error?.message || String(error); }
           }
 
@@ -593,10 +618,11 @@ export class McpEccServer {
           result = { folders: await providers.mail.listFolders() };
         }
         else if (name === 'mail.listMessages') {
-          const args_ = args as { accountId: string; folderId: string; limit?: number; query?: string };
+          const args_ = args as { accountId: string; folderId: string; limit?: number; cursor?: string; query?: string };
           const providers = await this.getOrCreateProviders(args_.accountId);
           if (!providers.mail) throw new Error('Mail not supported for this account');
-          result = { messages: await providers.mail.listMessages(args_.folderId, { limit: args_.limit, query: args_.query }) };
+          const page = await providers.mail.listMessages(args_.folderId, { limit: args_.limit, cursor: args_.cursor, query: args_.query });
+          result = { ...page, nextCursor: page.nextCursor };
         }
         else if (name === 'mail.getMessage') {
           const args_ = args as { accountId: string; messageId: string };
@@ -611,10 +637,11 @@ export class McpEccServer {
           result = { message: await providers.mail.sendMessage(args_) };
         }
         else if (name === 'mail.searchMessages') {
-          const args_ = args as { accountId: string; query: string; limit?: number };
+          const args_ = args as { accountId: string; query: string; limit?: number; cursor?: string };
           const providers = await this.getOrCreateProviders(args_.accountId);
           if (!providers.mail) throw new Error('Mail not supported for this account');
-          result = { messages: await providers.mail.searchMessages(args_.query, { limit: args_.limit }) };
+          const page = await providers.mail.searchMessages(args_.query, { limit: args_.limit, cursor: args_.cursor });
+          result = { ...page, nextCursor: page.nextCursor };
         }
         else if (name === 'mail.moveMessage') {
           const args_ = args as { accountId: string; messageId: string; folderId: string };
@@ -646,10 +673,11 @@ export class McpEccServer {
           result = { calendars: await providers.calendar.listCalendars() };
         }
         else if (name === 'calendar.listEvents') {
-          const args_ = args as { accountId: string; calendarId: string; timeMin?: number; timeMax?: number; limit?: number };
+          const args_ = args as { accountId: string; calendarId: string; timeMin?: number; timeMax?: number; limit?: number; cursor?: string };
           const providers = await this.getOrCreateProviders(args_.accountId);
           if (!providers.calendar) throw new Error('Calendar not supported for this account');
-          result = { events: await providers.calendar.listEvents(args_.calendarId, { timeMin: args_.timeMin, timeMax: args_.timeMax, limit: args_.limit }) };
+          const page = await providers.calendar.listEvents(args_.calendarId, { timeMin: args_.timeMin, timeMax: args_.timeMax, limit: args_.limit, cursor: args_.cursor });
+          result = { ...page, nextCursor: page.nextCursor };
         }
         else if (name === 'calendar.getEvent') {
           const args_ = args as { accountId: string; calendarId: string; eventId: string };
@@ -688,7 +716,8 @@ export class McpEccServer {
           const args_ = args as { accountId: string; limit?: number; cursor?: string };
           const providers = await this.getOrCreateProviders(args_.accountId);
           if (!providers.contacts) throw new Error('Contacts not supported for this account');
-          result = { contacts: await providers.contacts.listContacts({ limit: args_.limit, cursor: args_.cursor }) };
+          const page = await providers.contacts.listContacts({ limit: args_.limit, cursor: args_.cursor });
+          result = { ...page, nextCursor: page.nextCursor };
         }
         else if (name === 'contacts.get') {
           const args_ = args as { accountId: string; contactId: string };
@@ -718,10 +747,11 @@ export class McpEccServer {
           result = { success: true };
         }
         else if (name === 'contacts.search') {
-          const args_ = args as { accountId: string; query: string; limit?: number };
+          const args_ = args as { accountId: string; query: string; limit?: number; cursor?: string };
           const providers = await this.getOrCreateProviders(args_.accountId);
           if (!providers.contacts) throw new Error('Contacts not supported for this account');
-          result = { contacts: await providers.contacts.searchContacts(args_.query, { limit: args_.limit }) };
+          const page = await providers.contacts.searchContacts(args_.query, { limit: args_.limit, cursor: args_.cursor });
+          result = { ...page, nextCursor: page.nextCursor };
         }
 
         else {

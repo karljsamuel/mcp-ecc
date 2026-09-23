@@ -8,6 +8,7 @@ import type {
   CreateContactInput,
   UpdateContactInput,
   SearchOptions,
+  PaginatedResult,
 } from '@mcp-ecc/core';
 
 // Minimal vCard 3.0 escaping
@@ -104,14 +105,17 @@ export class CardDAVProvider implements IContactsProvider {
     return books;
   }
 
-  async listContacts(options: ListContactsOptions = {}): Promise<Contact[]> {
+  async listContacts(options: ListContactsOptions = {}): Promise<PaginatedResult<Contact>> {
     const books = await this.getAddressBooks();
     const contacts: Contact[] = [];
     for (const book of books) {
       const vcards = await this.fetchVCardObjects(book);
       contacts.push(...vcards);
     }
-    return options.limit ? contacts.slice(0, options.limit) : contacts;
+    const offset = options.cursor ? Number(options.cursor) : 0;
+    const items = options.limit ? contacts.slice(offset, offset + options.limit) : contacts.slice(offset);
+    const nextCursor = offset + items.length < contacts.length ? String(offset + items.length) : undefined;
+    return { items, nextCursor, total: contacts.length };
   }
 
   private async fetchVCardObjects(book: DAVAddressBook): Promise<Contact[]> {
@@ -152,7 +156,7 @@ export class CardDAVProvider implements IContactsProvider {
   }
 
   async getContact(contactId: string): Promise<Contact> {
-    const contacts = await this.listContacts();
+    const contacts = (await this.listContacts()).items;
     const c = contacts.find(x => x.id === contactId);
     if (!c) throw new Error(`Contact not found: ${contactId}`);
     return c;
@@ -207,13 +211,16 @@ export class CardDAVProvider implements IContactsProvider {
     });
   }
 
-  async searchContacts(query: string, options: SearchOptions = {}): Promise<Contact[]> {
-    const contacts = await this.listContacts();
+  async searchContacts(query: string, options: SearchOptions = {}): Promise<PaginatedResult<Contact>> {
+    const contacts = (await this.listContacts()).items;
     const q = query.toLowerCase();
-    return contacts.filter(c =>
+    const filtered = contacts.filter(c =>
       c.displayName.toLowerCase().includes(q) ||
       c.emails.some(e => e.email.toLowerCase().includes(q)) ||
       (c.organization || '').toLowerCase().includes(q)
     );
+    const offset = options.cursor ? Number(options.cursor) : 0;
+    const items = options.limit ? filtered.slice(offset, offset + options.limit) : filtered.slice(offset);
+    return { items, nextCursor: offset + items.length < filtered.length ? String(offset + items.length) : undefined, total: filtered.length };
   }
 }
