@@ -1,31 +1,28 @@
-name: Publish to npm & MCP Registry
+name: Publish to npm
 
-# Manual release. Publish the internal @mcp-ecc/* packages first (in dependency
-# order), then @karljsamuel/mcp-ecc. Requires repo secrets NPM_TOKEN (npm) and a
-# one-time `mcp-publisher login github` for the MCP Registry (run locally).
+# Release publication. Publish the internal @mcp-ecc/* packages first (in dependency
+# order), then mcp-ecc. Authentication uses npm Trusted Publishing via GitHub
+# Actions OIDC; no npm token is stored or required.
 on:
+  release:
+    types: [published]
   workflow_dispatch:
     inputs:
       version:
         description: 'Semver to publish (e.g. 0.5.1)'
         required: true
         default: '0.6.0'
-      to_mcp_registry:
-        description: 'Also publish to the MCP Registry (needs mcp-publisher)'
-        required: false
-        type: boolean
-        default: true
 
 jobs:
   publish:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
       id-token: write
     steps:
       - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
@@ -36,13 +33,22 @@ jobs:
 
       - name: Set version across packages
         id: version
+        env:
+          RELEASE_VERSION: ${{ github.event_name == 'release' && github.event.release.tag_name || github.event.inputs.version }}
         run: |
-          V="${{ github.event.inputs.version }}"
-          node -e "const r=require('./package.json');r.version='$V';require('fs').writeFileSync('package.json',JSON.stringify(r,null,2)+'\n')"
+          V="$RELEASE_VERSION"
+          V="${V#v}"
+          [[ "$V" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]] || { echo "Invalid SemVer: $V" >&2; exit 1; }
+          VERSION="$V" node -e "const fs=require('fs'),r=require('./package.json');r.version=process.env.VERSION;fs.writeFileSync('package.json',JSON.stringify(r,null,2)+'\\n')"
           find packages -name package.json -not -path '*/node_modules/*' | while read f; do
-            node -e "const p=require('./$f');if(!p.private){p.version='$V';require('fs').writeFileSync('$f',JSON.stringify(p,null,2)+'\n')}"
+            PACKAGE_FILE="$f" VERSION="$V" node -e "const fs=require('fs'),path=require('path'),f=process.env.PACKAGE_FILE,p=require('./'+f);if(!p.private){p.version=process.env.VERSION;p.repository={type:'git',url:'https://github.com/karljsamuel/mcp-ecc.git',directory:path.dirname(f)};fs.writeFileSync(f,JSON.stringify(p,null,2)+'\\n')}"
           done
           echo "ver=$V" >> "$GITHUB_OUTPUT"
+          if [[ "$V" == *-* ]]; then
+            echo "npm_tag=${V#*-}" >> "$GITHUB_OUTPUT"
+          else
+            echo "npm_tag=latest" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Build all packages
         run: npx turbo run build
@@ -51,8 +57,6 @@ jobs:
         run: node scripts/rewrite-file-deps.mjs
 
       - name: Publish internal @mcp-ecc packages
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -e
           for pkg in \
@@ -68,17 +72,8 @@ jobs:
             packages/mcp-server \
             packages/management-api; do
             echo "publishing $pkg"
-            npm publish "./$pkg" --access public
+            npm publish "./$pkg" --access public --provenance --tag "${{ steps.version.outputs.npm_tag }}"
           done
 
       - name: Publish entry package
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish ./packages/cli --access public
-
-      - name: Publish to MCP Registry
-        if: ${{ github.event.inputs.to_mcp_registry == 'true' }}
-        run: |
-          curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher && sudo mv mcp-publisher /usr/local/bin/
-          mcp-publisher login github-oidc
-          mcp-publisher publish
+        run: npm publish ./packages/cli --access public --provenance --tag "${{ steps.version.outputs.npm_tag }}"
