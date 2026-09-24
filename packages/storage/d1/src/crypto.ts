@@ -24,10 +24,16 @@ async function decryptLegacyD1(value: string, masterKey: string): Promise<string
 }
 async function decryptLegacy(value: string, masterKey: string): Promise<string> {
   try {
-    const plaintext = CryptoJS.AES.decrypt(value, masterKey).toString(CryptoJS.enc.Utf8);
-    if (!plaintext) throw new Error('CryptoJS returned empty plaintext');
-    return plaintext;
-  } catch { return decryptLegacyD1(value, masterKey); }
+    return await decryptLegacyD1(value, masterKey);
+  } catch (d1Error) {
+    try {
+      const plaintext = CryptoJS.AES.decrypt(value, masterKey).toString(CryptoJS.enc.Utf8);
+      if (!plaintext) throw new Error('CryptoJS returned empty plaintext');
+      return plaintext;
+    } catch (cryptoJsError) {
+      throw new Error('Unable to decrypt legacy D1 ciphertext', { cause: d1Error });
+    }
+  }
 }
 export function isCurrent(value: string): boolean { return value.startsWith(PREFIX); }
 export async function encrypt(value: string, masterKey: string): Promise<string> {

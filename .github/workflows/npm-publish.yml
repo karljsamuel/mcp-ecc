@@ -33,12 +33,15 @@ jobs:
 
       - name: Set version across packages
         id: version
+        env:
+          RELEASE_VERSION: ${{ github.event_name == 'release' && github.event.release.tag_name || github.event.inputs.version }}
         run: |
-          V="${{ github.event_name == 'release' && github.event.release.tag_name || github.event.inputs.version }}"
+          V="$RELEASE_VERSION"
           V="${V#v}"
-          node -e "const r=require('./package.json');r.version='$V';require('fs').writeFileSync('package.json',JSON.stringify(r,null,2)+'\n')"
+          [[ "$V" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]] || { echo "Invalid SemVer: $V" >&2; exit 1; }
+          VERSION="$V" node -e "const fs=require('fs'),r=require('./package.json');r.version=process.env.VERSION;fs.writeFileSync('package.json',JSON.stringify(r,null,2)+'\\n')"
           find packages -name package.json -not -path '*/node_modules/*' | while read f; do
-            node -e "const fs=require('fs'),path=require('path'),f='$f',p=require('./'+f);if(!p.private){p.version='$V';p.repository={type:'git',url:'https://github.com/karljsamuel/mcp-ecc.git',directory:path.dirname(f)};fs.writeFileSync(f,JSON.stringify(p,null,2)+'\\n')}"
+            PACKAGE_FILE="$f" VERSION="$V" node -e "const fs=require('fs'),path=require('path'),f=process.env.PACKAGE_FILE,p=require('./'+f);if(!p.private){p.version=process.env.VERSION;p.repository={type:'git',url:'https://github.com/karljsamuel/mcp-ecc.git',directory:path.dirname(f)};fs.writeFileSync(f,JSON.stringify(p,null,2)+'\\n')}"
           done
           echo "ver=$V" >> "$GITHUB_OUTPUT"
           if [[ "$V" == *-* ]]; then

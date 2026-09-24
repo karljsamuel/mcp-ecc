@@ -57,6 +57,12 @@ export class SQLiteStorage implements StorageAdapter {
         this.db.prepare('UPDATE oauth_clients SET clientSecret = ?, updatedAt = ? WHERE id = ?')
           .run(encrypt(plaintext, this.encryptionKey), Date.now(), row.id);
       }
+      for (const row of this.db.prepare('SELECT id, mcpApiKey FROM users').all() as any[]) {
+        if (!row.mcpApiKey || isCurrent(row.mcpApiKey)) continue;
+        const plaintext = decrypt(row.mcpApiKey, this.encryptionKey);
+        this.db.prepare('UPDATE users SET mcpApiKey = ?, updatedAt = ? WHERE id = ?')
+          .run(encrypt(plaintext, this.encryptionKey), Date.now(), row.id);
+      }
       this.db.exec('COMMIT');
     } catch (error) {
       this.db.exec('ROLLBACK');
@@ -241,7 +247,7 @@ export class SQLiteStorage implements StorageAdapter {
       user.displayName,
       user.passwordHash,
       user.role,
-      user.mcpApiKey || null,
+      user.mcpApiKey ? this.encrypt(user.mcpApiKey) : null,
       user.createdAt,
       user.updatedAt
     );
@@ -260,9 +266,10 @@ export class SQLiteStorage implements StorageAdapter {
   }
 
   async getUserByApiKey(apiKey: string): Promise<User | null> {
-    const stmt = this.db.prepare('SELECT * FROM users WHERE mcpApiKey = ?');
-    const row: any = stmt.get(apiKey);
-    return row ? this.mapUser(row) : null;
+    for (const row of this.db.prepare('SELECT * FROM users').all() as any[]) {
+      if (row.mcpApiKey && this.decrypt(row.mcpApiKey) === apiKey) return this.mapUser(row);
+    }
+    return null;
   }
 
   async listUsers(): Promise<User[]> {
@@ -297,7 +304,7 @@ export class SQLiteStorage implements StorageAdapter {
       displayName: row.displayName,
       passwordHash: row.passwordHash,
       role: row.role,
-      mcpApiKey: row.mcpApiKey || undefined,
+      mcpApiKey: row.mcpApiKey ? this.decrypt(row.mcpApiKey) : '',
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
     };

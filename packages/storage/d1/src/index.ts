@@ -241,8 +241,9 @@ export class D1Storage implements StorageAdapter {
     const plaintext = await this.decrypt(value);
     if (!isCurrent(value)) {
       const migrated = await this.encrypt(plaintext);
-      await this.db.prepare(`UPDATE ${table} SET ${column} = ?, updated_at = ? WHERE ${idColumn} = ?`)
+      const result = await this.db.prepare(`UPDATE ${table} SET ${column} = ?, updated_at = ? WHERE ${idColumn} = ?`)
         .bind(migrated, Date.now(), id).run();
+      if (!result.success) throw new Error(`Failed to migrate ${table}.${column}`);
     }
     return plaintext;
   }
