@@ -53,4 +53,3 @@ CREATE TABLE IF NOT EXISTS sync_states (
   accountId TEXT PRIMARY KEY,
   data TEXT NOT NULL
 );
-    
