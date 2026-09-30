@@ -25,6 +25,7 @@ export const STORAGE_SCHEMA: readonly TableDefinition[] = [
       {"name": {"sqlite": "passwordHash", "d1": "password_hash"}, "definition": "TEXT NOT NULL"},
       {"name": "role", "definition": {"sqlite": "TEXT NOT NULL", "d1": "TEXT NOT NULL DEFAULT 'user'"}},
       {"name": {"sqlite": "mcpApiKey", "d1": "mcp_api_key"}, "definition": {"sqlite": "TEXT", "d1": "TEXT NOT NULL"}},
+      {"name": "apiKeyHash", "definition": "TEXT"},
       {"name": {"sqlite": "createdAt", "d1": "created_at"}, "definition": "INTEGER NOT NULL"},
       {"name": {"sqlite": "updatedAt", "d1": "updated_at"}, "definition": "INTEGER NOT NULL"},
     ],
@@ -249,6 +250,11 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigration[] = [
     { table: 'accounts', name: 'display_name', definition: 'TEXT', backends: ['d1'] },
     { table: 'accounts', name: 'health', definition: 'TEXT', backends: ['d1'] },
     { table: 'accounts', name: 'last_sync_at', definition: 'INTEGER', backends: ['d1'] },
+  ] },
+  { version: 3, name: 'api-key-hash-index', columns: [
+    { table: 'users', name: 'apiKeyHash', definition: 'TEXT', backends: ['sqlite', 'd1'] },
+  ], statements: (backend) => [
+    `CREATE INDEX IF NOT EXISTS idx_users_api_key_hash ON ${backend === 'sqlite' ? 'users' : 'users'} (apiKeyHash)`
   ] },
 ];
 

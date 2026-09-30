@@ -1,4 +1,5 @@
 import { DatabaseSync } from 'node:sqlite';
+import { createHash } from 'node:crypto';
 import { StorageAdapter, User, Account, OAuthClient, AccountCredentials, SyncState, Settings, EmailMessage, MailFolder, CalendarEvent, Calendar, Contact, OAuthStateData } from '@mcp-ecc/core';
 import { SCHEMA_MIGRATIONS, MIGRATION_LEDGER_SQL, READ_MIGRATIONS_SQL, RECORD_MIGRATION_SQL, migrationColumns } from '@mcp-ecc/core';
 import { decrypt, encrypt, isCurrent } from './crypto.js';
@@ -27,10 +28,11 @@ export class SQLiteStorage implements StorageAdapter {
       try {
         const applied = this.db.prepare(READ_MIGRATIONS_SQL).all() as { version: number }[];
         if (!applied.some(row => row.version === migration.version)) {
-          for (const sql of migration.statements?.('sqlite') || []) this.db.exec(sql);
+          // Add columns first, then run statements (some statements may depend on new columns)
           for (const column of migrationColumns(migration, 'sqlite')) {
             this.ensureColumn(column.table, column.name, column.definition);
           }
+          for (const sql of migration.statements?.('sqlite') || []) this.db.exec(sql);
           this.db.prepare(RECORD_MIGRATION_SQL).run(migration.version, migration.name, Date.now());
         }
         this.db.exec('COMMIT');
@@ -236,10 +238,15 @@ export class SQLiteStorage implements StorageAdapter {
   }
 
   // --- Users ---
+  private hashApiKey(apiKey: string): string {
+    return createHash('sha256').update(apiKey, 'utf8').digest('hex');
+  }
+
   async saveUser(user: User): Promise<void> {
+    const apiKeyHash = user.mcpApiKey ? this.hashApiKey(user.mcpApiKey) : null;
     const stmt = this.db.prepare(`
-      INSERT OR REPLACE INTO users (id, username, displayName, passwordHash, role, mcpApiKey, createdAt, updatedAt)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT OR REPLACE INTO users (id, username, displayName, passwordHash, role, mcpApiKey, apiKeyHash, createdAt, updatedAt)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     stmt.run(
       user.id,
@@ -248,6 +255,7 @@ export class SQLiteStorage implements StorageAdapter {
       user.passwordHash,
       user.role,
       user.mcpApiKey ? this.encrypt(user.mcpApiKey) : null,
+      apiKeyHash,
       user.createdAt,
       user.updatedAt
     );
@@ -266,11 +274,14 @@ export class SQLiteStorage implements StorageAdapter {
   }
 
   async getUserByApiKey(apiKey: string): Promise<User | null> {
-    for (const row of this.db.prepare('SELECT * FROM users').all() as any[]) {
+      const apiKeyHash = createHash('sha256').update(apiKey, 'utf8').digest('hex');
+      const stmt = this.db.prepare('SELECT * FROM users WHERE apiKeyHash = ?');
+      const row: any = stmt.get(apiKeyHash);
+      if (!row) return null;
+      // Verify the actual key matches (constant-time comparison would be better but this is internal)
       if (row.mcpApiKey && this.decrypt(row.mcpApiKey) === apiKey) return this.mapUser(row);
+      return null;
     }
-    return null;
-  }
 
   async listUsers(): Promise<User[]> {
     const stmt = this.db.prepare('SELECT * FROM users ORDER BY createdAt ASC');

@@ -49,10 +49,10 @@ function database(t, backend, legacy = false) {
   });
   if (legacy) {
     let sql = readFileSync(join(__dirname, 'fixtures', `${backend}-legacy-schema.sql`), 'utf8');
-    const missing = backend === 'sqlite' ? ['clientType'] : ['client_type', 'display_name', 'health', 'last_sync_at'];
+    const missing = backend === 'sqlite' ? ['clientType', 'clientPlatform', 'apiKeyHash'] : ['client_type', 'client_platform', 'api_key_hash', 'display_name', 'health', 'last_sync_at'];
     // Only remove account display_name, not users/contacts columns.
     sql = sql.replace(/CREATE TABLE IF NOT EXISTS (\w+) \([\s\S]*?\);/g, (table, name) => {
-      if (!['accounts', 'oauth_clients'].includes(name)) return table;
+      if (!['accounts', 'oauth_clients', 'users'].includes(name)) return table;
       return table.split('\n').filter(line => !missing.some(column => line.trim().startsWith(`${column} `))).join('\n');
     });
     db.exec(sql);
@@ -78,7 +78,7 @@ for (const operation of ['CREATE TABLE IF NOT EXISTS users', 'PRAGMA table_info(
       assert.ok(!applied.includes(operation.startsWith('CREATE') || operation.startsWith('INSERT') ? 1 : 2));
       port.fault = undefined;
       await storage.initSchema();
-      assert.deepEqual(versions(db), [1, 2]);
+      assert.deepEqual(versions(db), [1, 2, 3]);
       assert.ok(columns(db, 'oauth_clients').includes('client_platform'));
     });
   }
@@ -100,16 +100,18 @@ for (const backend of ['sqlite', 'd1']) {
   test(`${backend}: fresh schema preserves every legacy column, constraint and index`, async t => {
     const { db, open } = database(t, backend);
     const storage = open();
-    if (backend === 'sqlite') assert.deepEqual(versions(db), [1, 2], 'constructor initializes synchronously');
+    if (backend === 'sqlite') assert.deepEqual(versions(db), [1, 2, 3], 'constructor initializes synchronously');
     await storage.initSchema();
     const expected = new DatabaseSync(':memory:');
     try {
       expected.exec(readFileSync(join(__dirname, 'fixtures', `${backend}-legacy-schema.sql`), 'utf8'));
       expected.exec(`ALTER TABLE oauth_clients ADD COLUMN ${backend === 'sqlite' ? 'clientPlatform' : 'client_platform'} TEXT`);
+      expected.exec(`ALTER TABLE users ADD COLUMN apiKeyHash TEXT`);
+      expected.exec(`CREATE INDEX IF NOT EXISTS idx_users_api_key_hash ON users(apiKeyHash)`);
       assert.deepEqual(metadata(db), metadata(expected));
     } finally { expected.close(); }
     const client = { id: 'roundtrip', ownerId: 'owner', provider: 'google', label: 'test', clientId: 'local', clientSecret: 'local-fixture', scopes: [], clientType: 'public', clientPlatform: 'desktop', enabled: true, createdAt: 1, updatedAt: 2 };
-    await storage.saveUser({ id: 'owner', username: 'owner', displayName: 'Owner', passwordHash: 'fixture', role: 'user', mcpApiKey: 'fixture', createdAt: 1, updatedAt: 2 });
+    await storage.saveUser({ id: 'owner', username: 'owner', displayName: 'Owner', passwordHash: 'fixture', role: 'user', mcpApiKey: 'fixture-api-key', createdAt: 1, updatedAt: 2 });
     await storage.saveOAuthClient(client);
     const saved = await storage.getOAuthClient(client.id);
     assert.equal(saved.clientType, client.clientType);
@@ -176,7 +178,7 @@ test('sqlite: ledger write failure rolls back the entire version; constructor th
   assert.ok(!columns(db, 'oauth_clients').includes('clientPlatform'), 'ALTER rolled back');
   db.exec('DROP TRIGGER block_migration');
   open();
-  assert.deepEqual(versions(db), [1, 2]);
+  assert.deepEqual(versions(db), [1, 2, 3]);
 });
 
 test('sqlite: a real ALTER failure is visible and leaves its version unapplied', async t => {
@@ -191,7 +193,7 @@ test('d1: concurrent initSchema calls on one adapter share initialization', asyn
   const { db, open } = database(t, 'd1', true);
   const storage = open();
   await Promise.all([storage.initSchema(), storage.initSchema(), storage.initSchema()]);
-  assert.deepEqual(versions(db), [1, 2]);
+  assert.deepEqual(versions(db), [1, 2, 3]);
 });
 
 function columns(db, table) { return db.prepare(`PRAGMA table_info(${table})`).all().map(row => row.name); }
@@ -207,6 +209,6 @@ for (const backend of ['sqlite', 'd1']) {
     for (const column of backend === 'sqlite' ? ['clientType', 'clientPlatform'] : ['client_type', 'client_platform']) {
       assert.ok(names.includes(column), `missing ${column}`);
     }
-    assert.deepEqual(versions(db), [1, 2]);
+    assert.deepEqual(versions(db), [1, 2, 3]);
   });
 }

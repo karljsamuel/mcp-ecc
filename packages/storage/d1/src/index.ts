@@ -203,10 +203,11 @@ export class D1Storage implements StorageAdapter {
     for (const migration of SCHEMA_MIGRATIONS) {
       if (applied.some(row => row.version === migration.version)) continue;
       try {
-        for (const sql of migration.statements?.('d1') || []) await this.schemaQuery(sql);
+        // Add columns first, then run statements (some statements may depend on new columns)
         for (const column of migrationColumns(migration, 'd1')) {
           await this.ensureColumn(column.table, column.name, column.definition);
         }
+        for (const sql of migration.statements?.('d1') || []) await this.schemaQuery(sql);
         // D1/HTTP does not support interactive transactions. All operations are
         // additive and retryable; never mark a partially completed version applied.
         await this.schemaQuery(RECORD_MIGRATION_SQL, [migration.version, migration.name, Date.now()]);
@@ -241,9 +242,9 @@ export class D1Storage implements StorageAdapter {
     const plaintext = await this.decrypt(value);
     if (!isCurrent(value)) {
       const migrated = await this.encrypt(plaintext);
-      const result = await this.db.prepare(`UPDATE ${table} SET ${column} = ?, updated_at = ? WHERE ${idColumn} = ?`)
-        .bind(migrated, Date.now(), id).run();
-      if (!result.success) throw new Error(`Failed to migrate ${table}.${column}`);
+      const result = await this.db.prepare(`UPDATE ${table} SET ${column} = ?, updated_at = ? WHERE ${idColumn} = ? AND ${column} = ?`)
+        .bind(migrated, Date.now(), id, value).run();
+      if (!result.success) throw new Error(`Failed to migrate ${table}.${column} (concurrent modification)`);
     }
     return plaintext;
   }
@@ -452,9 +453,9 @@ export class D1Storage implements StorageAdapter {
       `).bind(
         msg.id, accountId, msg.labelsOrFolders[0] || 'INBOX', msg.threadId || null,
         msg.from.address,
-        JSON.stringify(msg.to.map(t => t.address)),
-        JSON.stringify(msg.cc?.map(t => t.address) || []),
-        JSON.stringify(msg.bcc?.map(t => t.address) || []),
+        JSON.stringify(msg.to.map((t: { address: string }) => t.address)),
+        JSON.stringify(msg.cc?.map((t: { address: string }) => t.address) || []),
+        JSON.stringify(msg.bcc?.map((t: { address: string }) => t.address) || []),
         msg.subject, msg.snippet || null, msg.body || null, msg.htmlBody || null,
         msg.date, msg.unread ? 1 : 0, msg.starred ? 1 : 0,
         JSON.stringify(msg.labelsOrFolders),

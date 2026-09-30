@@ -173,4 +173,3 @@ CREATE INDEX IF NOT EXISTS idx_mail_unread ON mail_messages(account_id, unread, 
 CREATE INDEX IF NOT EXISTS idx_contacts_account ON contacts(account_id);
 CREATE INDEX IF NOT EXISTS idx_events_account_range ON calendar_events(account_id, start_at, end_at);
 CREATE INDEX IF NOT EXISTS idx_calendars_account ON calendars(account_id);
-    
