@@ -141,24 +141,27 @@ export class ZohoProvider implements IMailProvider, ICalendarProvider, IContacts
         params.set('folderId', String(folder.folderId));
       }
 
-      // Support is:unread in query string by converting to status=0
-      if (options.query) {
-        const q = options.query.trim();
-        if (q.toLowerCase() === 'is:unread') {
-          params.set('status', '0');
-        } else {
-          params.set('searchKey', q);
-        }
+      // Zoho API doesn't properly combine folderId with status=0 (unread).
+      // When status=0 is used, it returns unread from ALL folders, not just the specified folder.
+      // Workaround: fetch from folder and filter for unread client-side.
+      const wantsUnread = options.unreadOnly || (options.query?.trim().toLowerCase() === 'is:unread');
+      
+      if (options.query && !wantsUnread) {
+        params.set('searchKey', options.query.trim());
       }
-      if (options.unreadOnly && !params.has('status')) {
-        params.set('status', '0'); // 0 = unread, 1 = read
-      }
+      // Don't use status=0 parameter - filter client-side instead
 
       const res = await this.fetchZoho<any>(
         `https://mail.zoho.com/api/v1/accounts/${zuid}/messages/view?${params}`
       );
 
-      const items = (res.data || []).map((item: any) => this.mapMessage(item));
+      let items = (res.data || []).map((item: any) => this.mapMessage(item));
+      
+      // Filter for unread client-side if requested
+      if (wantsUnread) {
+        items = items.filter((msg: EmailMessage) => msg.unread);
+      }
+
       const nextCursor = res.nextPageToken || res.next_cursor || res.page?.next || (items.length === Number(options.limit || 50) ? String(Number(options.cursor || 0) + items.length) : undefined);
       return { items, nextCursor, total: res.total || undefined };
     }
