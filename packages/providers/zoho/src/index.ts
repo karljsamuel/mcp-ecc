@@ -90,16 +90,16 @@ export class ZohoProvider implements IMailProvider, ICalendarProvider, IContacts
 
   private async getZohoMailAccountId(): Promise<string> {
     if (this.mailAccountId) return this.mailAccountId;
-    
+
     const res = await this.fetchZoho<{ data: Array<{ accountId: string }> }>(
       `https://mail.zoho.com/api/v1/accounts`
     );
-    
+
     if (res.data?.length > 0) {
       this.mailAccountId = res.data[0].accountId;
       return this.mailAccountId;
     }
-    
+
     throw new Error('No Zoho Mail accounts found for this authorization');
   }
 
@@ -110,7 +110,7 @@ export class ZohoProvider implements IMailProvider, ICalendarProvider, IContacts
     const res = await this.fetchZoho<any>(
       `https://mail.zoho.com/api/v1/accounts/${zuid}/folders`
     );
-    
+
     return (res.data || []).map((f: any) => ({
       id: f.folderId,
       name: f.folderName,
@@ -145,7 +145,7 @@ export class ZohoProvider implements IMailProvider, ICalendarProvider, IContacts
       // When status=0 is used, it returns unread from ALL folders, not just the specified folder.
       // Workaround: fetch from folder and filter for unread client-side.
       const wantsUnread = options.unreadOnly || (options.query?.trim().toLowerCase() === 'is:unread');
-      
+
       if (options.query && !wantsUnread) {
         params.set('searchKey', options.query.trim());
       }
@@ -156,7 +156,7 @@ export class ZohoProvider implements IMailProvider, ICalendarProvider, IContacts
       );
 
       let items = (res.data || []).map((item: any) => this.mapMessage(item));
-      
+
       // Filter for unread client-side if requested
       if (wantsUnread) {
         items = items.filter((msg: EmailMessage) => msg.unread);
@@ -279,7 +279,7 @@ export class ZohoProvider implements IMailProvider, ICalendarProvider, IContacts
     const res = await this.fetchCalendar<{ calendars: any[] }>(
       `https://${this.calendarServer}/api/v1/calendars`
     );
-    
+
     return (res.calendars || []).map(cal => ({
       // Events API requires the calendar UID (not the numeric id).
       id: cal.uid || cal.id || cal.calendarId,
@@ -331,7 +331,7 @@ export class ZohoProvider implements IMailProvider, ICalendarProvider, IContacts
     const res = await this.fetchCalendar<any>(
       `https://${this.calendarServer}/api/v1/calendars/${calendarId}/events?${params}`
     );
-    
+
     const items = (res.events || []).map((evt: any) => this.mapEvent(evt));
     const nextCursor = res.nextPageToken || res.next_cursor || res.page?.next || (options.limit && items.length === options.limit ? String(Number(options.cursor || 0) + items.length) : undefined);
     return { items, nextCursor, total: res.total || undefined };
