@@ -1,5 +1,4 @@
 node_modules
-dist
 .turbo
 .git
 out
@@ -7,7 +6,6 @@ out
 config.json
 *.tsbuildinfo
 packages/*/node_modules
-packages/*/dist
 packages/*/src/*.js
 packages/*/src/*.d.ts
 packages/*/src/*.map
