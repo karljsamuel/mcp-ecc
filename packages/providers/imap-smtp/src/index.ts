@@ -87,9 +87,14 @@ export class ImapSmtpProvider implements IMailProvider, ICalendarProvider, ICont
 
       const search: any = { all: true };
       if (options.query) {
-        search.text = options.query;
+        const q = options.query.trim();
+        if (q.toLowerCase() === 'is:unread') {
+          search.seen = false;
+        } else {
+          search.text = q;
+        }
       }
-      if (options.unreadOnly) {
+      if (options.unreadOnly && !search.seen) {
         search.seen = false;
       }
 

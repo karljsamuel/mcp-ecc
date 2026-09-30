@@ -965,7 +965,7 @@ async function handleListOAuthClients(): Promise<void> {
       console.log(`     Client ID: ${c.clientId}`);
       console.log(`     Platform:  ${c.clientPlatform || 'desktop'} (${c.clientType || 'public'})`);
       if (c.tenantId) console.log(`     Tenant ID: ${c.tenantId}`);
-      if (c.accountsServer) console.log(`     Server:    ${c.accountsServer}`);
+      if (c.provider === 'zoho' && c.accountsServer) console.log(`     Server:    ${c.accountsServer}`);
       console.log(`     Enabled:   ${c.enabled ? chalk.green('yes') : chalk.red('no')}`);
       console.log('');
     });

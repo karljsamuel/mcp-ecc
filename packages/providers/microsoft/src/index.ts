@@ -125,21 +125,34 @@ export class MicrosoftProvider implements IMailProvider, ICalendarProvider, ICon
   }
 
   async listMessages(folderId: string, options: ListMessagesOptions = {}): Promise<PaginatedResult<EmailMessage>> {
-    let url = folderId === 'ALL' 
-      ? '/me/messages'
-      : `/me/mailFolders/${folderId}/messages`;
+      let url = folderId === 'ALL'
+        ? '/me/messages'
+        : `/me/mailFolders/${folderId}/messages`;
 
-    const params = new URLSearchParams();
-    params.set('$top', String(Math.min(options.limit || 50, 1000)));
-    params.set('$select', 'id,subject,bodyPreview,from,toRecipients,ccRecipients,bccRecipients,receivedDateTime,isRead,categories,hasAttachments,importance,conversationId');
-    
-    if (options.query) {
-      params.set('$search', `"${options.query}"`);
+      const params = new URLSearchParams();
+      params.set('$top', String(Math.min(options.limit || 50, 1000)));
+      params.set('$select', 'id,subject,bodyPreview,from,toRecipients,ccRecipients,bccRecipients,receivedDateTime,isRead,categories,hasAttachments,importance,conversationId');
+
+      let filterParts: string[] = [];
+      if (options.query) {
+        // Support is:unread in query string by converting to $filter
+        const q = options.query.trim();
+        if (q.toLowerCase() === 'is:unread') {
+          filterParts.push('isRead eq false');
+        } else {
+          params.set('$search', `"${q}"`);
+        }
+      }
+      if (options.unreadOnly) {
+        filterParts.push('isRead eq false');
+      }
+      if (filterParts.length > 0) {
+        params.set('$filter', filterParts.join(' and '));
+      }
+      const requestUrl = this.graphCursor(options.cursor) || `${url}?${params}`;
+      const res = await this.fetchGraph<{ value: any[]; '@odata.nextLink'?: string }>(requestUrl);
+      return { items: (res.value || []).map(item => this.mapMessage(item)), nextCursor: this.graphNextCursor(res['@odata.nextLink']) };
     }
-    const requestUrl = this.graphCursor(options.cursor) || `${url}?${params}`;
-    const res = await this.fetchGraph<{ value: any[]; '@odata.nextLink'?: string }>(requestUrl);
-    return { items: (res.value || []).map(item => this.mapMessage(item)), nextCursor: this.graphNextCursor(res['@odata.nextLink']) };
-  }
 
   async getMessage(messageId: string): Promise<EmailMessage> {
     const res = await this.fetchGraph<any>(`/me/messages/${messageId}?$select=id,subject,body,bodyPreview,from,toRecipients,ccRecipients,bccRecipients,receivedDateTime,isRead,categories,hasAttachments,importance,conversationId,internetMessageHeaders`);

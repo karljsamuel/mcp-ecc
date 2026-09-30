@@ -99,6 +99,9 @@ export class GoogleProvider implements IMailProvider, ICalendarProvider, IContac
     if (folderLabel) {
       q += q ? ` label:${folderLabel}` : `label:${folderLabel}`;
     }
+    if (options.unreadOnly) {
+      q += q ? ' is:unread' : 'is:unread';
+    }
 
     const res = await this.gmail.users.messages.list({
       userId: 'me',
