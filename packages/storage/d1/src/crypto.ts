@@ -15,24 +15,14 @@ async function deriveKey(masterKey: string): Promise<CryptoKey> {
   const digest = await crypto.subtle.digest('SHA-256', encoder.encode(masterKey));
   return crypto.subtle.importKey('raw', source(new Uint8Array(digest)), { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
 }
-async function decryptLegacyD1(value: string, masterKey: string): Promise<string> {
-  const input = decodeBase64(value);
-  const plaintext = await crypto.subtle.decrypt(
-    { name: 'AES-GCM', iv: source(input.slice(0, 12)) }, await deriveKey(masterKey), source(input.slice(12)),
-  );
-  return decoder.decode(plaintext);
-}
 async function decryptLegacy(value: string, masterKey: string): Promise<string> {
+  // Legacy ciphertext is CryptoJS/OpenSSL format. Try CryptoJS first (like SQLite does).
   try {
-    return await decryptLegacyD1(value, masterKey);
-  } catch (d1Error) {
-    try {
-      const plaintext = CryptoJS.AES.decrypt(value, masterKey).toString(CryptoJS.enc.Utf8);
-      if (!plaintext) throw new Error('CryptoJS returned empty plaintext');
-      return plaintext;
-    } catch (cryptoJsError) {
-      throw new Error('Unable to decrypt legacy D1 ciphertext', { cause: d1Error });
-    }
+    const plaintext = CryptoJS.AES.decrypt(value, masterKey).toString(CryptoJS.enc.Utf8);
+    if (!plaintext) throw new Error('CryptoJS returned empty plaintext');
+    return plaintext;
+  } catch (cryptoJsError) {
+    throw new Error('Unable to decrypt legacy D1 ciphertext', { cause: cryptoJsError });
   }
 }
 export function isCurrent(value: string): boolean { return value.startsWith(PREFIX); }
