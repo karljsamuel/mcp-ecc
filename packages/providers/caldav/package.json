@@ -20,7 +20,7 @@
   },
   "dependencies": {
     "@mcp-ecc/core": "file:../../core",
-    "tsdav": "^2.3.0"
+    "tsdav": "^2.3.4"
   },
   "devDependencies": {
     "typescript": "^5.9.3",

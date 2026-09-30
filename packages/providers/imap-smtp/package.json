@@ -20,9 +20,9 @@
   },
   "dependencies": {
     "@mcp-ecc/core": "file:../../core",
-    "mailparser": "^3.9.17",
-    "nodemailer": "^9.0.6",
-    "imapflow": "^1.7.6"
+    "mailparser": "^3.9.28",
+    "nodemailer": "^10.0.11",
+    "imapflow": "^2.0.8"
   },
   "devDependencies": {
     "typescript": "^5.9.3",
