@@ -25,12 +25,12 @@
     "imapflow": "^1.7.6"
   },
   "devDependencies": {
-    "typescript": "^5.9.3",
-    "@types/node": "^24.0.0",
+    "typescript": "^7.0.2",
+    "@types/node": "^26.6.3",
     "@types/mailparser": "^3.4.4",
     "@types/nodemailer": "^7.0.0",
     "vitest": "^4.1.11",
-    "eslint": "^10.9.1"
+    "eslint": "^10.11.0"
   },
   "publishConfig": {
     "access": "public"

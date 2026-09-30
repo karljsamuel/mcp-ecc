@@ -38,10 +38,10 @@
     "zod": "^4.5.2"
   },
   "devDependencies": {
-    "typescript": "^5.9.3",
-    "@types/node": "^24.0.0",
+    "typescript": "^7.0.2",
+    "@types/node": "^26.6.3",
     "vitest": "^4.1.11",
-    "eslint": "^10.9.1"
+    "eslint": "^10.11.0"
   },
   "publishConfig": {
     "access": "public"
