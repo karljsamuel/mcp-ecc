@@ -25,7 +25,8 @@
       "@mcp-ecc/provider-imap-smtp": ["../providers/imap-smtp/dist"],
       "@mcp-ecc/provider-caldav": ["../providers/caldav/dist"],
       "@mcp-ecc/provider-carddav": ["../providers/carddav/dist"]
-    }
+    },
+    "types": ["node"]
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist"],
