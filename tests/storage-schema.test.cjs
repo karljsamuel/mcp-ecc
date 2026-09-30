@@ -6,6 +6,7 @@ const { tmpdir } = require('node:os');
 const { join } = require('node:path');
 const { SQLiteStorage } = require('@mcp-ecc/storage-sqlite');
 const { D1Storage } = require('@mcp-ecc/storage-d1');
+const CryptoJS = require('crypto-js');
 
 // Local D1-compatible SQL port, NOT live Cloudflare D1. Every successful query
 // executes against a real isolated SQLite file. No .env or network is used.
@@ -124,7 +125,12 @@ for (const backend of ['sqlite', 'd1']) {
     const before = new Map();
     for (const table of tables) {
       const cols = db.prepare(`PRAGMA table_info(${table})`).all();
-      const values = cols.map(col => /owner_?id/i.test(col.name) ? 'users-id' : /account_?id/i.test(col.name) ? 'accounts-id' : col.name === 'id' ? `${table}-id` : col.type === 'INTEGER' ? 7 : `fixture-${col.name}`);
+      const values = cols.map(col => {
+        const encrypted = (backend === 'sqlite' && ['credentials', 'clientSecret', 'mcpApiKey'].includes(col.name)) ||
+          (backend === 'd1' && ['credentials_json', 'client_secret', 'mcp_api_key'].includes(col.name));
+        if (encrypted) return CryptoJS.AES.encrypt(`fixture-${col.name}`, 'isolated-test-key').toString();
+        return /owner_?id/i.test(col.name) ? 'users-id' : /account_?id/i.test(col.name) ? 'accounts-id' : col.name === 'id' ? `${table}-id` : col.type === 'INTEGER' ? 7 : `fixture-${col.name}`;
+      });
       db.prepare(`INSERT INTO ${table} (${cols.map(col => col.name).join(',')}) VALUES (${cols.map(() => '?').join(',')})`).run(...values);
       before.set(table, db.prepare(`SELECT * FROM ${table}`).all());
     }
@@ -140,7 +146,17 @@ for (const backend of ['sqlite', 'd1']) {
     if (port) assert.ok(!port.statements.some(sql => /^(ALTER|INSERT|CREATE INDEX)/.test(sql)), 'applied migrations are skipped');
     for (const [table, rows] of before) {
       const names = Object.keys(rows[0]);
-      assert.deepEqual(db.prepare(`SELECT ${names.join(',')} FROM ${table}`).all(), rows, table);
+      if (backend === 'sqlite' && ['users', 'accounts', 'oauth_clients'].includes(table)) {
+        const actual = db.prepare(`SELECT ${names.join(',')} FROM ${table}`).all()[0];
+        const expected = rows[0];
+        const encryptedColumn = table === 'users' ? 'mcpApiKey' : table === 'accounts' ? 'credentials' : 'clientSecret';
+        assert.equal(actual.id, expected.id);
+        assert.equal(actual[encryptedColumn].startsWith('mcp-ecc:v2:'), true);
+        assert.notEqual(actual[encryptedColumn], expected[encryptedColumn]);
+        assert.ok(actual.updatedAt >= expected.updatedAt);
+      } else {
+        assert.deepEqual(db.prepare(`SELECT ${names.join(',')} FROM ${table}`).all(), rows, table);
+      }
     }
     if (backend === 'd1') {
       for (const column of ['display_name', 'health', 'last_sync_at']) assert.ok(columns(db, 'accounts').includes(column));

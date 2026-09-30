@@ -63,6 +63,21 @@ node packages/cli/dist/bin.js --help
 
 ---
 
+## Upgrade and encryption migration
+
+**Important for existing installations:** install and run the latest `0.6.x` migration release before upgrading to `0.7.x`.
+
+The migration release changes credential encryption from the discontinued CryptoJS implementation to platform cryptography APIs:
+
+- Node.js SQLite uses `node:crypto` with authenticated AES-256-GCM.
+- Cloudflare D1 uses the Workers Web Crypto API with authenticated AES-256-GCM.
+- Existing `0.6.x` ciphertext is read once and automatically re-encrypted in the new format.
+- New AES-256-GCM values are authenticated and migration is fail-closed.
+- Legacy CryptoJS ciphertext has no authentication tag; if it is tampered with, its integrity cannot be cryptographically verified. Back up the database and treat failed or unexpected legacy decryptions as migration failures; values are never overwritten unless decryption succeeds.
+- Keep the same `MCP_ENCRYPTION_KEY` during the upgrade.
+
+After the migration release has successfully started and accessed the existing data, upgrade to `0.7.x`. Version `0.7.x` removes the legacy CryptoJS reader. Back up the SQLite database or D1 database before upgrading.
+
 ## Connecting an MCP client
 
 Point your client at the HTTP endpoint with your per-user API key (shown in the web UI under **Settings**):

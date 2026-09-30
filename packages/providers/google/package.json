@@ -20,7 +20,7 @@
   },
   "dependencies": {
     "@mcp-ecc/core": "file:../../core",
-    "googleapis": "^176.0.0"
+    "googleapis": "^181.0.0"
   },
   "devDependencies": {
     "typescript": "^5.9.3",
