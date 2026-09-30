@@ -124,35 +124,44 @@ export class ZohoProvider implements IMailProvider, ICalendarProvider, IContacts
   }
 
   async listMessages(folderId: string, options: ListMessagesOptions = {}): Promise<PaginatedResult<EmailMessage>> {
-    const zuid = await this.getZohoMailAccountId();
-    const params = new URLSearchParams();
-    params.set('limit', String(Math.min(options.limit || 50, 200)));
-    if (options.cursor) params.set('start', options.cursor);
+      const zuid = await this.getZohoMailAccountId();
+      const params = new URLSearchParams();
+      params.set('limit', String(Math.min(options.limit || 50, 200)));
+      if (options.cursor) params.set('start', options.cursor);
 
-    // Resolve folder name (e.g. "INBOX") to its Zoho folderId, otherwise the
-    // view endpoint lists a different default folder.
-    const folders = await this.fetchZoho<any>(
-      `https://mail.zoho.com/api/v1/accounts/${zuid}/folders`
-    );
-    const folder = (folders.data || []).find(
-      (f: any) => String(f.folderId) === String(folderId) || f.folderName?.toLowerCase() === String(folderId).toLowerCase()
-    );
-    if (folder?.folderId) {
-      params.set('folderId', String(folder.folderId));
+      // Resolve folder name (e.g. "INBOX") to its Zoho folderId, otherwise the
+      // view endpoint lists a different default folder.
+      const folders = await this.fetchZoho<any>(
+        `https://mail.zoho.com/api/v1/accounts/${zuid}/folders`
+      );
+      const folder = (folders.data || []).find(
+        (f: any) => String(f.folderId) === String(folderId) || f.folderName?.toLowerCase() === String(folderId).toLowerCase()
+      );
+      if (folder?.folderId) {
+        params.set('folderId', String(folder.folderId));
+      }
+
+      // Support is:unread in query string by converting to status=0
+      if (options.query) {
+        const q = options.query.trim();
+        if (q.toLowerCase() === 'is:unread') {
+          params.set('status', '0');
+        } else {
+          params.set('searchKey', q);
+        }
+      }
+      if (options.unreadOnly && !params.has('status')) {
+        params.set('status', '0'); // 0 = unread, 1 = read
+      }
+
+      const res = await this.fetchZoho<any>(
+        `https://mail.zoho.com/api/v1/accounts/${zuid}/messages/view?${params}`
+      );
+
+      const items = (res.data || []).map((item: any) => this.mapMessage(item));
+      const nextCursor = res.nextPageToken || res.next_cursor || res.page?.next || (items.length === Number(options.limit || 50) ? String(Number(options.cursor || 0) + items.length) : undefined);
+      return { items, nextCursor, total: res.total || undefined };
     }
-
-    if (options.query) {
-      params.set('searchKey', options.query);
-    }
-
-    const res = await this.fetchZoho<any>(
-      `https://mail.zoho.com/api/v1/accounts/${zuid}/messages/view?${params}`
-    );
-    
-    const items = (res.data || []).map((item: any) => this.mapMessage(item));
-    const nextCursor = res.nextPageToken || res.next_cursor || res.page?.next || (items.length === Number(options.limit || 50) ? String(Number(options.cursor || 0) + items.length) : undefined);
-    return { items, nextCursor, total: res.total || undefined };
-  }
 
   async getMessage(messageId: string): Promise<EmailMessage> {
     const zuid = await this.getZohoMailAccountId();
