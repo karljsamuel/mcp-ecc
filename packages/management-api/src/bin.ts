@@ -1,12 +1,15 @@
 #!/usr/bin/env node
-import 'dotenv/config';
+import { config } from 'dotenv';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { existsSync, mkdirSync } from 'fs';
 import { ManagementApi } from './index.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+// Load .env from current working directory (user's project root)
+// Allow override via MCP_ENV_FILE env var
+const envPath = process.env.MCP_ENV_FILE || join(process.cwd(), '.env');
+config({ path: envPath, override: true });
+
 const env = (name: string): string | undefined => process.env[name]?.trim();
 
 const PORT = parseInt(env('PORT') || '3001', 10);

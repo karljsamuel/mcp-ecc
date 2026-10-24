@@ -7,3 +7,6 @@ export * from './auth.js';
 
 // Utility functions
 export { generateId, sanitizeForLog, delay, retry, slugify, generateSlug } from './utils.js';
+
+// Configuration utilities
+export * from './config.js';
