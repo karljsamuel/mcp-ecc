@@ -111,16 +111,38 @@ export class ZohoProvider implements IMailProvider, ICalendarProvider, IContacts
       `https://mail.zoho.com/api/v1/accounts/${zuid}/folders`
     );
 
-    return (res.data || []).map((f: any) => ({
-      id: f.folderId,
-      name: f.folderName,
-      parentId: f.parentFolderId,
-      type: this.mapFolderType(f.folderName),
-      unreadCount: f.unreadCount || 0,
-      totalCount: f.messageCount || 0,
-      createdAt: 0,
-      updatedAt: 0,
-    }));
+    // Get accurate unread count for INBOX by fetching messages with status=0
+    // The folder list API returns stale unreadCount, so we fetch accurate count for INBOX
+    let inboxUnread = 0;
+    const inboxFolder = (res.data || []).find(
+      (f: any) => f.folderName?.toLowerCase() === 'inbox'
+    );
+    if (inboxFolder?.folderId) {
+      try {
+        const msgRes = await this.fetchZoho<any>(
+          `https://mail.zoho.com/api/v1/accounts/${zuid}/messages/view?folderId=${inboxFolder.folderId}&status=0&limit=1`
+        );
+        inboxUnread = msgRes.total || msgRes.resultSizeEstimate || 0;
+      } catch (e) {
+        console.warn('Failed to fetch INBOX unread count:', e);
+        // Fallback to API-provided count
+        inboxUnread = inboxFolder.unreadCount || 0;
+      }
+    }
+
+    return (res.data || []).map((f: any) => {
+      const isInbox = f.folderName?.toLowerCase() === 'inbox';
+      return {
+        id: f.folderId,
+        name: f.folderName,
+        parentId: f.parentFolderId,
+        type: this.mapFolderType(f.folderName),
+        unreadCount: isInbox ? inboxUnread : (f.unreadCount || 0),
+        totalCount: f.messageCount || 0,
+        createdAt: 0,
+        updatedAt: 0,
+      };
+    });
   }
 
   async listMessages(folderId: string, options: ListMessagesOptions = {}): Promise<PaginatedResult<EmailMessage>> {

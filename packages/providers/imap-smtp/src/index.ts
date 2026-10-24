@@ -66,15 +66,30 @@ export class ImapSmtpProvider implements IMailProvider, ICalendarProvider, ICont
     const client = await this.connect();
     try {
       const boxes = await client.list();
-      return boxes.map(box => ({
-        id: box.path,
-        name: box.name || box.path,
-        type: this.mapFolderType(box.name || box.path),
-        unreadCount: 0,
-        totalCount: 0,
-        createdAt: 0,
-        updatedAt: 0,
-      }));
+      const folders: MailFolder[] = [];
+
+      for (const box of boxes) {
+        let unreadCount = 0;
+        try {
+          await client.mailboxOpen(box.path);
+          const unreadMessages = await client.search({ seen: false }, { uid: true });
+          unreadCount = Array.isArray(unreadMessages) ? unreadMessages.length : 0;
+        } catch (e) {
+          console.warn(`Failed to fetch unread count for folder ${box.path}:`, e);
+        }
+
+        folders.push({
+          id: box.path,
+          name: box.name || box.path,
+          type: this.mapFolderType(box.name || box.path),
+          unreadCount,
+          totalCount: 0,
+          createdAt: 0,
+          updatedAt: 0,
+        });
+      }
+
+      return folders;
     } finally {
       await client.logout();
     }

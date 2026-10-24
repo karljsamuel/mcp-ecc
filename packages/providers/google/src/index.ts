@@ -67,8 +67,23 @@ export class GoogleProvider implements IMailProvider, ICalendarProvider, IContac
     const res = await this.gmail.users.labels.list({ userId: 'me' });
     const labels = res.data.labels || [];
 
+    // Get unread count for INBOX using messages.list with is:unread query
+    // labels.get doesn't return messagesUnread for system labels like INBOX
+    let inboxUnread = 0;
+    try {
+      const msgRes = await this.gmail.users.messages.list({
+        userId: 'me',
+        labelIds: ['INBOX'],
+        q: 'is:unread',
+        maxResults: 1,
+      });
+      inboxUnread = msgRes.data.resultSizeEstimate || 0;
+    } catch (e) {
+      console.warn('Failed to fetch INBOX unread count:', e);
+    }
+
     const systemFolders: MailFolder[] = [
-      { id: 'INBOX', name: 'Inbox', type: 'inbox', unreadCount: 0, totalCount: 0, createdAt: 0, updatedAt: 0 },
+      { id: 'INBOX', name: 'Inbox', type: 'inbox', unreadCount: inboxUnread, totalCount: 0, createdAt: 0, updatedAt: 0 },
       { id: 'SENT', name: 'Sent', type: 'sent', unreadCount: 0, totalCount: 0, createdAt: 0, updatedAt: 0 },
       { id: 'DRAFT', name: 'Drafts', type: 'drafts', unreadCount: 0, totalCount: 0, createdAt: 0, updatedAt: 0 },
       { id: 'TRASH', name: 'Trash', type: 'trash', unreadCount: 0, totalCount: 0, createdAt: 0, updatedAt: 0 },
