@@ -20,10 +20,5 @@
     "types": ["node"]
   },
   "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist"],
-  "references": [
-    { "path": "../core" },
-    { "path": "../mcp-server" },
-    { "path": "../storage/sqlite" }
-  ]
+  "exclude": ["node_modules", "dist"]
 }
