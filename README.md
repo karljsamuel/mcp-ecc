@@ -10,7 +10,7 @@ A Model Context Protocol (MCP) server that lets AI assistants read, write and ma
 
 ![License](https://img.shields.io/badge/license-MIT-blue?logo=open-source-initiative&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)
-![Version](https://img.shields.io/badge/version-0.6.0-purple)
+![Version](https://img.shields.io/badge/version-0.7.0-purple)
 [![Sponsor](https://img.shields.io/github/sponsors/karljsamuel?color=ea4aaa&logo=github-sponsors&logoColor=white)](https://github.com/sponsors/karljsamuel)
 ![Node](https://img.shields.io/badge/node-%3E%3D24-339933?logo=nodedotjs&logoColor=white)
 ![MCP](https://img.shields.io/badge/Model%20Context%20Protocol-black)
@@ -37,16 +37,27 @@ A Model Context Protocol (MCP) server that lets AI assistants read, write and ma
 ```bash
 docker run -d --name mcp-ecc \
   -p 3001:3001 \
-  -e MCP_ENCRYPTION_KEY="$(openssl rand -hex 32)" \
+  -v mcp-ecc-data:/data \
   karljsamuel/mcp-ecc:latest
 ```
 
-Open **http://localhost:3001** → create the admin account → add your provider accounts.
+With no configuration the container starts in **setup mode**: it prints a one-time setup token, binds to `127.0.0.1` only, and serves just the setup page. Open **http://localhost:3001/setup**, paste the token, choose the database, and let it verify the connection.
+
+Because a `.env` written inside a container is lost when the container is recreated, the final step offers a **copy** button instead of displaying the file. Paste the result into the `.env` beside your `docker-compose.yml` and pass the variables through, then restart.
+
+### Web UI
+
+```bash
+mcp-ecc setup          # or: start the API unconfigured and open /setup
+```
+
+Either path walks the same steps: pick SQLite or Cloudflare D1, **verify the connection actually works**, generate an encryption key, set the server options, write `.env`, then create the first admin account.
 
 ### CLI (npm)
 
 ```bash
 npm install -g mcp-ecc
+mcp-ecc setup      # first run — writes .env and creates the admin account
 mcp-ecc            # interactive TUI — login, add accounts, manage everything
 mcp-ecc start      # stdio MCP server for agent hosts
 ```
@@ -63,20 +74,36 @@ node packages/cli/dist/bin.js --help
 
 ---
 
-## Upgrade and encryption migration
+## Upgrading to 0.7.0
 
-**Important for existing installations:** install and run the latest `0.6.x` migration release before upgrading to `0.7.x`.
+> **This release invalidates stored credentials. Every account must be re-authenticated once after upgrading, and per-user API keys are regenerated. Back up your database first if you want a rollback path.**
 
-The migration release changes credential encryption from the discontinued CryptoJS implementation to platform cryptography APIs:
+### What changed
 
-- Node.js SQLite uses `node:crypto` with authenticated AES-256-GCM.
-- Cloudflare D1 uses the Workers Web Crypto API with authenticated AES-256-GCM.
-- Existing `0.6.x` ciphertext is read once and automatically re-encrypted in the new format.
-- New AES-256-GCM values are authenticated and migration is fail-closed.
-- Legacy CryptoJS ciphertext has no authentication tag; if it is tampered with, its integrity cannot be cryptographically verified. Back up the database and treat failed or unexpected legacy decryptions as migration failures; values are never overwritten unless decryption succeeds.
-- Keep the same `MCP_ENCRYPTION_KEY` during the upgrade.
+Credential encryption was rebuilt from scratch:
 
-After the migration release has successfully started and accessed the existing data, upgrade to `0.7.x`. Version `0.7.x` removes the legacy CryptoJS reader. Back up the SQLite database or D1 database before upgrading.
+- **One canonical ciphertext format** shared by both backends: `base64(iv[12] || authTag[16] || ciphertext)`, AES-256-GCM.
+- **Per-owner key derivation.** The data key is derived with HKDF-SHA256 over `MCP_ENCRYPTION_KEY` using the owner id, instead of one global key. A value encrypted for one user cannot be decrypted as another.
+- **Key rotation is supported.** Each encrypted row records a key generation in the database, so you can move to a new key and re-encrypt in batches while both generations remain readable.
+- **CryptoJS is gone** — the dependency, the legacy reader, and the migration path with it. There is no automatic migration from pre-0.7 ciphertext.
+- **No fallback key.** A missing or placeholder `MCP_ENCRYPTION_KEY` is a hard startup error. The key is never read from or written to the database.
+
+### Why you must re-authenticate
+
+Values written by earlier versions cannot be decrypted by this one, by design. Everything encrypted at rest — OAuth refresh tokens, OAuth client secrets, IMAP/SMTP app passwords — becomes unreadable. You can start from a fresh database, or upgrade in place and re-run the auth flow per account.
+
+### If you were told to run 0.6.x first
+
+That instruction is obsolete. `0.6.x` was an intermediate step toward a platform-crypto format; 0.7.0 supersedes it and removes both the intermediate step and the reader it depended on. Going straight from `0.6.0` to `0.7.0` is the supported path.
+
+### Rotating the key
+
+1. Set `MCP_ENCRYPTION_KEY` to the new key.
+2. List the old key as `MCP_ENCRYPTION_KEY_PREVIOUS` in the form `"<generation>:<key>"` (comma or whitespace separated for several).
+3. Call `rotateEncryptionKeys(batchSize)` on the storage adapter — rows are re-encrypted in batches and both generations decrypt during the changeover.
+4. Once every row is rotated, drop `MCP_ENCRYPTION_KEY_PREVIOUS`.
+
+Set `MCP_ENCRYPTION_KEY_GENERATION` explicitly when you rotate, so a later key is not renumbered into an earlier generation's slot.
 
 ## Connecting an MCP client
 
