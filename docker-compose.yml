@@ -34,7 +34,8 @@ services:
       # Bind address. 0.0.0.0 = all interfaces (default); use 127.0.0.1 when a
       # reverse proxy or tunnel terminates TLS in front of this container.
       HOST: ${HOST:-0.0.0.0}
-      # Session-cookie signing secret (fallback: derived from MCP_ENCRYPTION_KEY)
+      # Session-cookie signing secret. Independent of MCP_ENCRYPTION_KEY;
+      # generated on first run if unset.
       SESSION_SECRET: ${SESSION_SECRET:-}
       # Internal container port (do not change)
       PORT: "3001"

@@ -15,12 +15,32 @@ export function loadEnv(envPath?: string): void {
 
 export const ENCRYPTION_KEY_VAR = 'MCP_ENCRYPTION_KEY';
 
+// Placeholder values that must never be accepted as a real key. The first is the
+// historical fallback; the rest are what .env.example and older docs told people
+// to paste in, so a verbatim copy must fail loudly rather than encrypt real
+// credentials under a publicly known string.
+export const PLACEHOLDER_ENCRYPTION_KEYS: ReadonlySet<string> = new Set([
+  'default-secret-key',
+  'change-me',
+  'change-me-to-a-long-random-secret',
+  'changeme',
+  'your-secret-here',
+  'replace-me',
+]);
+
+export function isPlaceholderEncryptionKey(key: string | undefined | null): boolean {
+  const trimmed = (key ?? '').trim();
+  if (!trimmed) return true;
+  return PLACEHOLDER_ENCRYPTION_KEYS.has(trimmed.toLowerCase());
+}
+
 // There is deliberately no fallback here. A missing or placeholder key is a
 // hard configuration error: falling back to a constant would encrypt real
 // credentials under a publicly known key.
 export function getEncryptionKey(): string | undefined {
   const key = process.env[ENCRYPTION_KEY_VAR]?.trim();
-  if (!key || key === 'default-secret-key') return undefined;
+  if (!key) return undefined;
+  if (PLACEHOLDER_ENCRYPTION_KEYS.has(key.toLowerCase())) return undefined;
   return key;
 }
 

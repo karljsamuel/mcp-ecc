@@ -294,6 +294,11 @@ for (const backend of ['sqlite', 'd1']) {
     try {
       assert.throws(() => build(undefined), /missing or is a placeholder/);
       assert.throws(() => build('default-secret-key'), /placeholder/);
+      // The value .env.example historically told people to paste in must not be
+      // usable as a real key, and neither may the variants around it.
+      assert.throws(() => build('change-me-to-a-long-random-secret'), /placeholder/);
+      assert.throws(() => build('change-me'), /placeholder/);
+      assert.throws(() => build('CHANGE-ME-TO-A-LONG-RANDOM-SECRET'), /placeholder/);
       assert.throws(() => build('   '), /missing or is a placeholder/);
     } finally {
       if (saved === undefined) delete process.env.MCP_ENCRYPTION_KEY; else process.env.MCP_ENCRYPTION_KEY = saved;

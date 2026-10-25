@@ -1,12 +1,12 @@
 import { DatabaseSync } from 'node:sqlite';
 import { createHash } from 'node:crypto';
-import { getEncryptionKey, StorageAdapter, User, Account, OAuthClient, AccountCredentials, SyncState, Settings, EmailMessage, MailFolder, CalendarEvent, Calendar, Contact, OAuthStateData } from '@mcp-ecc/core';
+import { getEncryptionKey, PLACEHOLDER_ENCRYPTION_KEYS, StorageAdapter, User, Account, OAuthClient, AccountCredentials, SyncState, Settings, EmailMessage, MailFolder, CalendarEvent, Calendar, Contact, OAuthStateData } from '@mcp-ecc/core';
 import { SCHEMA_MIGRATIONS, MIGRATION_LEDGER_SQL, READ_MIGRATIONS_SQL, RECORD_MIGRATION_SQL, migrationColumns } from '@mcp-ecc/core';
 import { decrypt, encrypt, EncryptionError } from './crypto.js';
 
 // A master key that is absent or equal to a well-known placeholder must never be
 // used: it would encrypt real credentials under a publicly documented constant.
-const PLACEHOLDER_KEYS = new Set(['default-secret-key']);
+const PLACEHOLDER_KEYS = PLACEHOLDER_ENCRYPTION_KEYS;
 
 // Additional constructor argument for keys retired by a rotation. Old rows stay
 // readable while their generation is still in the keyring.
@@ -17,7 +17,7 @@ const GENERATION_VAR = 'MCP_ENCRYPTION_KEY_GENERATION';
 
 function assertUsableMasterKey(key: string | undefined, label: string): string {
   const trimmed = key?.trim();
-  if (!trimmed || PLACEHOLDER_KEYS.has(trimmed)) {
+  if (!trimmed || PLACEHOLDER_KEYS.has(trimmed.toLowerCase())) {
     throw new EncryptionError(
       `Refusing to start: ${label} is missing or is a placeholder. Set MCP_ENCRYPTION_KEY (generate with: openssl rand -hex 32).`,
     );
