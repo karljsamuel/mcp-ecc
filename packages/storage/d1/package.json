@@ -19,9 +19,7 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
-    "@mcp-ecc/core": "file:../../core",
-    "crypto-js": "^4.2.0",
-    "@types/crypto-js": "^4.2.0"
+    "@mcp-ecc/core": "file:../../core"
   },
   "devDependencies": {
     "typescript": "^5.9.3",

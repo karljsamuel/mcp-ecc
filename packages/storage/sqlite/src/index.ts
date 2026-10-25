@@ -1,15 +1,98 @@
 import { DatabaseSync } from 'node:sqlite';
 import { createHash } from 'node:crypto';
-import { StorageAdapter, User, Account, OAuthClient, AccountCredentials, SyncState, Settings, EmailMessage, MailFolder, CalendarEvent, Calendar, Contact, OAuthStateData } from '@mcp-ecc/core';
+import { getEncryptionKey, StorageAdapter, User, Account, OAuthClient, AccountCredentials, SyncState, Settings, EmailMessage, MailFolder, CalendarEvent, Calendar, Contact, OAuthStateData } from '@mcp-ecc/core';
 import { SCHEMA_MIGRATIONS, MIGRATION_LEDGER_SQL, READ_MIGRATIONS_SQL, RECORD_MIGRATION_SQL, migrationColumns } from '@mcp-ecc/core';
-import { decrypt, encrypt, isCurrent } from './crypto.js';
+import { decrypt, encrypt, EncryptionError } from './crypto.js';
+
+// A master key that is absent or equal to a well-known placeholder must never be
+// used: it would encrypt real credentials under a publicly documented constant.
+const PLACEHOLDER_KEYS = new Set(['default-secret-key']);
+
+// Additional constructor argument for keys retired by a rotation. Old rows stay
+// readable while their generation is still in the keyring.
+const PREVIOUS_KEYS_VAR = 'MCP_ENCRYPTION_KEY_PREVIOUS';
+// Optional explicit label for the current key. Needed to drop a retired key after
+// every row has been rotated onto the current generation.
+const GENERATION_VAR = 'MCP_ENCRYPTION_KEY_GENERATION';
+
+function assertUsableMasterKey(key: string | undefined, label: string): string {
+  const trimmed = key?.trim();
+  if (!trimmed || PLACEHOLDER_KEYS.has(trimmed)) {
+    throw new EncryptionError(
+      `Refusing to start: ${label} is missing or is a placeholder. Set MCP_ENCRYPTION_KEY (generate with: openssl rand -hex 32).`,
+    );
+  }
+  return trimmed;
+}
+
+/**
+ * Retired keys, addressed by the generation they served. Explicit numbering (not
+ * array position) is what makes a generation stable: a retired key can be dropped
+ * from the configuration once every row has been rotated off it, without
+ * renumbering the rows that remain.
+ */
+export type RetiredKeys = Record<number, string>;
+
+/**
+ * Parses `MCP_ENCRYPTION_KEY_PREVIOUS`, a comma/whitespace separated list of
+ * `<generation>:<key>` pairs, e.g. "1:9f2c...,2:41ab...". Key material is never
+ * echoed back in an error message.
+ */
+function parseRetiredKeys(raw: string): RetiredKeys {
+  const keys: RetiredKeys = {};
+  const entries = raw.split(/[\s,]+/).filter(Boolean);
+  for (let index = 0; index < entries.length; index += 1) {
+    const separator = entries[index].indexOf(':');
+    const generation = Number(entries[index].slice(0, separator));
+    const key = entries[index].slice(separator + 1);
+    if (separator < 1 || !Number.isInteger(generation) || generation < 1 || !key) {
+      throw new EncryptionError(`MCP_ENCRYPTION_KEY_PREVIOUS entry ${index + 1} is not a "<generation>:<key>" pair`);
+    }
+    keys[generation] = assertUsableMasterKey(key, `the retired credential encryption key for generation ${generation}`);
+  }
+  return keys;
+}
+
+/**
+ * Builds the generation -> key map. The current key sits at `currentGeneration`,
+ * which defaults to one past the highest retired generation; pass it explicitly
+ * (or set MCP_ENCRYPTION_KEY_GENERATION) once every row has been rotated so a
+ * retired key can be dropped without renumbering the rows it left behind.
+ */
+function resolveKeyring(encryptionKey?: string, retiredKeys: RetiredKeys = {}, currentGeneration?: number): { keys: Map<number, string>; generation: number } {
+  const configured = Object.keys(retiredKeys).length > 0 ? retiredKeys : parseRetiredKeys(process.env[PREVIOUS_KEYS_VAR] || '');
+  const keys = new Map<number, string>();
+  for (const [generation, key] of Object.entries(configured)) {
+    const number = Number(generation);
+    if (!Number.isInteger(number) || number < 1) {
+      throw new EncryptionError(`Retired encryption key generation '${generation}' is not a positive integer`);
+    }
+    keys.set(number, assertUsableMasterKey(key, `the retired credential encryption key for generation ${number}`));
+  }
+
+  // The current generation is explicit so that a retired key can be dropped once
+  // every row has been rotated off it, without renumbering the remaining rows.
+  const declared = currentGeneration ?? (process.env[GENERATION_VAR] ? Number(process.env[GENERATION_VAR]) : undefined);
+  const generation = declared ?? (keys.size === 0 ? 1 : Math.max(...keys.keys()) + 1);
+  if (!Number.isInteger(generation) || generation < 1) {
+    throw new EncryptionError(`${GENERATION_VAR} must be a positive integer`);
+  }
+  if (keys.has(generation)) {
+    throw new EncryptionError(`Encryption key generation ${generation} is assigned to both the current key and a retired key`);
+  }
+  keys.set(generation, assertUsableMasterKey(encryptionKey ?? getEncryptionKey(), 'the credential encryption key'));
+  return { keys, generation };
+}
 
 export class SQLiteStorage implements StorageAdapter {
   private db: DatabaseSync;
-  private encryptionKey: string;
+  private keys: Map<number, string>;
+  private generation: number;
 
-  constructor(dbPath: string, encryptionKey = 'default-secret-key') {
-    this.encryptionKey = encryptionKey;
+  constructor(dbPath: string, encryptionKey?: string, retiredKeys: RetiredKeys = {}, currentGeneration?: number) {
+    const keyring = resolveKeyring(encryptionKey, retiredKeys, currentGeneration);
+    this.keys = keyring.keys;
+    this.generation = keyring.generation;
     this.db = new DatabaseSync(dbPath);
     try {
       this.initSchema();
@@ -17,6 +100,62 @@ export class SQLiteStorage implements StorageAdapter {
       this.db.close();
       throw error;
     }
+  }
+
+  /** The key generation every new write uses. */
+  get encryptionKeyGeneration(): number {
+    return this.generation;
+  }
+
+  /** The generations this process can read; anything else is a hard error. */
+  get readableKeyGenerations(): number[] {
+    return [...this.keys.keys()].sort((a, b) => a - b);
+  }
+
+  private keyForGeneration(generation: number): string {
+    const key = this.keys.get(generation);
+    if (!key) {
+      throw new EncryptionError(
+        `No encryption key is configured for generation ${generation}; readable generations are [${this.readableKeyGenerations.join(', ')}]. ` +
+        `Add it to MCP_ENCRYPTION_KEY_PREVIOUS as "${generation}:<key>" so this row stays readable.`,
+      );
+    }
+    return key;
+  }
+
+  private currentMasterKey(): string {
+    return this.keyForGeneration(this.encryptionKeyGeneration);
+  }
+
+  private encryptFor(text: string, ownerId: string): string {
+    return encrypt(text, this.currentMasterKey(), ownerId);
+  }
+
+  /** Decrypts a blob for one owner, wrapping the reason into a record-naming error. */
+  private decryptOrThrow(ciphertext: string, ownerId: string, generation: number, record: string): string {
+    try {
+      return decrypt(ciphertext, this.keyForGeneration(generation), ownerId);
+    } catch (error) {
+      throw new EncryptionError(
+        `${record} could not be decrypted (owner '${ownerId}', key generation ${generation}). ` +
+        `Refusing to return a blank value that a later save would overwrite.`,
+        { cause: error },
+      );
+    }
+  }
+
+  /** For nullable secret columns: null/'' means "no secret stored", not a failure. */
+  private decryptOptional(ciphertext: string | null | undefined, ownerId: string, generation: number | null | undefined, record: string): string | null {
+    if (ciphertext === null || ciphertext === undefined || ciphertext === '') return null;
+    return this.decryptOrThrow(ciphertext, ownerId, generation ?? 1, record);
+  }
+
+  /** For NOT NULL secret columns: a missing or empty value is corruption, not "no secret". */
+  private decryptRequired(ciphertext: string | null | undefined, ownerId: string, generation: number | null | undefined, record: string): string {
+    if (ciphertext === null || ciphertext === undefined || ciphertext === '') {
+      throw new EncryptionError(`${record} is missing or empty, but the column is NOT NULL: this row is corrupt.`);
+    }
+    return this.decryptOrThrow(ciphertext, ownerId, generation ?? 1, record);
   }
 
   /** Synchronous for constructor compatibility; safe to call again at startup. */
@@ -41,35 +180,6 @@ export class SQLiteStorage implements StorageAdapter {
         throw new Error(`SQLite schema migration ${migration.version} (${migration.name}) failed`, { cause: error });
       }
     }
-    this.migrateLegacyEncryption();
-  }
-
-  private migrateLegacyEncryption(): void {
-    this.db.exec('BEGIN IMMEDIATE');
-    try {
-      for (const row of this.db.prepare('SELECT id, credentials FROM accounts').all() as any[]) {
-        if (!row.credentials || isCurrent(row.credentials)) continue;
-        const plaintext = decrypt(row.credentials, this.encryptionKey);
-        this.db.prepare('UPDATE accounts SET credentials = ?, updatedAt = ? WHERE id = ?')
-          .run(encrypt(plaintext, this.encryptionKey), Date.now(), row.id);
-      }
-      for (const row of this.db.prepare('SELECT id, clientSecret FROM oauth_clients').all() as any[]) {
-        if (!row.clientSecret || isCurrent(row.clientSecret)) continue;
-        const plaintext = decrypt(row.clientSecret, this.encryptionKey);
-        this.db.prepare('UPDATE oauth_clients SET clientSecret = ?, updatedAt = ? WHERE id = ?')
-          .run(encrypt(plaintext, this.encryptionKey), Date.now(), row.id);
-      }
-      for (const row of this.db.prepare('SELECT id, mcpApiKey FROM users').all() as any[]) {
-        if (!row.mcpApiKey || isCurrent(row.mcpApiKey)) continue;
-        const plaintext = decrypt(row.mcpApiKey, this.encryptionKey);
-        this.db.prepare('UPDATE users SET mcpApiKey = ?, updatedAt = ? WHERE id = ?')
-          .run(encrypt(plaintext, this.encryptionKey), Date.now(), row.id);
-      }
-      this.db.exec('COMMIT');
-    } catch (error) {
-      this.db.exec('ROLLBACK');
-      throw new Error('SQLite encrypted-data migration failed; no legacy values were rewritten', { cause: error });
-    }
   }
 
   private ensureColumn(table: string, column: string, definition: string): void {
@@ -79,18 +189,57 @@ export class SQLiteStorage implements StorageAdapter {
     }
   }
 
-  private encrypt(text: string): string {
-    return encrypt(text, this.encryptionKey);
-  }
+  // --- Key rotation ---
 
-  private decrypt(ciphertext: string): string {
-    if (!ciphertext) return '';
+  /**
+   * Re-encrypts every credential still held at an older key generation using the
+   * current one, in batches of `batchSize`. Interruptible and re-runnable:
+   * already-current rows are skipped and each rewrite is guarded so a concurrent
+   * writer is never clobbered. Both generations stay readable throughout, so a
+   * changeover needs no downtime. Returns the number of values rewritten.
+   */
+  rotateEncryptionKeys(batchSize = 100): number {
+    const target = this.encryptionKeyGeneration;
+    const columns = [
+      { table: 'accounts', owner: 'ownerId', cipher: 'credentials', generation: 'encryptionKeyGeneration', record: 'accounts.credentials' },
+      { table: 'oauth_clients', owner: 'ownerId', cipher: 'clientSecret', generation: 'encryptionKeyGeneration', record: 'oauth_clients.clientSecret' },
+      { table: 'users', owner: 'id', cipher: 'mcpApiKey', generation: 'encryptionKeyGeneration', record: 'users.mcpApiKey' },
+    ];
+    let rotated = 0;
+    this.db.exec('BEGIN IMMEDIATE');
     try {
-      return decrypt(ciphertext, this.encryptionKey);
-    } catch (e: any) {
-      console.warn('[mcp-ecc] Failed to decrypt SQLite data:', e.message);
-      return '';
+      for (const column of columns) {
+        for (;;) {
+          const rows = this.db.prepare(
+            `SELECT id AS id, ${column.owner} AS owner, ${column.cipher} AS cipher, ${column.generation} AS generation
+             FROM ${column.table} WHERE ${column.generation} < ? ORDER BY id LIMIT ?`,
+          ).all(target, batchSize) as any[];
+          if (rows.length === 0) break;
+          let progressed = 0;
+          for (const row of rows) {
+            if (!row.cipher) {
+              this.db.prepare(`UPDATE ${column.table} SET ${column.generation} = ? WHERE id = ?`).run(target, row.id);
+              progressed += 1;
+              continue;
+            }
+            const generation = row.generation ?? 1;
+            const plaintext = this.decryptOrThrow(row.cipher, row.owner, generation, `${column.record} for '${row.id}' during rotation`);
+            const result = this.db.prepare(
+              `UPDATE ${column.table} SET ${column.cipher} = ?, ${column.generation} = ? WHERE id = ? AND ${column.cipher} = ?`,
+            ).run(encrypt(plaintext, this.currentMasterKey(), row.owner), target, row.id, row.cipher);
+            if (Number(result.changes) > 0) { rotated += 1; progressed += 1; }
+          }
+          // A batch where nothing moved means a concurrent writer owns these rows:
+          // stop instead of spinning forever.
+          if (progressed === 0) break;
+        }
+      }
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
     }
+    return rotated;
   }
 
   // --- Account management ---
@@ -118,10 +267,10 @@ export class SQLiteStorage implements StorageAdapter {
   }
 
   async saveAccount(account: Account): Promise<void> {
-    const encCreds = this.encrypt(JSON.stringify(account.credentials || {}));
+    const encCreds = this.encryptFor(JSON.stringify(account.credentials || {}), account.ownerId);
     const stmt = this.db.prepare(`
-      INSERT OR REPLACE INTO accounts (id, ownerId, provider, name, slug, email, status, credentials, createdAt, updatedAt)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT OR REPLACE INTO accounts (id, ownerId, provider, name, slug, email, status, credentials, encryptionKeyGeneration, createdAt, updatedAt)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     stmt.run(
       account.id,
@@ -132,6 +281,7 @@ export class SQLiteStorage implements StorageAdapter {
       account.email,
       account.status,
       encCreds,
+      this.encryptionKeyGeneration,
       account.createdAt,
       account.updatedAt
     );
@@ -150,10 +300,13 @@ export class SQLiteStorage implements StorageAdapter {
   }
 
   private mapAccount(row: any): Account {
-    let credentials: AccountCredentials = {};
+    const plaintext = this.decryptRequired(row.credentials, row.ownerId, row.encryptionKeyGeneration, `accounts.credentials for account '${row.id}'`);
+    let credentials: AccountCredentials;
     try {
-      credentials = JSON.parse(this.decrypt(row.credentials));
-    } catch {}
+      credentials = JSON.parse(plaintext);
+    } catch (error) {
+      throw new EncryptionError(`accounts.credentials for account '${row.id}' decrypted but is not valid JSON`, { cause: error });
+    }
     return {
       id: row.id,
       ownerId: row.ownerId,
@@ -171,10 +324,10 @@ export class SQLiteStorage implements StorageAdapter {
 
   // --- OAuth clients ---
   async saveOAuthClient(client: OAuthClient): Promise<void> {
-    const encSecret = this.encrypt(client.clientSecret);
+    const encSecret = this.encryptFor(client.clientSecret, client.ownerId);
     const stmt = this.db.prepare(`
-      INSERT OR REPLACE INTO oauth_clients (id, ownerId, provider, label, clientId, clientSecret, scopes, tenantId, accountsServer, clientPlatform, clientType, enabled, createdAt, updatedAt)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT OR REPLACE INTO oauth_clients (id, ownerId, provider, label, clientId, clientSecret, scopes, tenantId, accountsServer, clientPlatform, clientType, enabled, encryptionKeyGeneration, createdAt, updatedAt)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     stmt.run(
       client.id,
@@ -189,6 +342,7 @@ export class SQLiteStorage implements StorageAdapter {
       client.clientPlatform || null,
       client.clientType || null,
       client.enabled ? 1 : 0,
+      this.encryptionKeyGeneration,
       client.createdAt,
       client.updatedAt
     );
@@ -211,14 +365,13 @@ export class SQLiteStorage implements StorageAdapter {
   }
 
   private mapOAuthClient(row: any): OAuthClient {
-    let clientSecret = '';
-    try {
-      clientSecret = this.decrypt(row.clientSecret);
-    } catch {}
+    const clientSecret = this.decryptRequired(row.clientSecret, row.ownerId, row.encryptionKeyGeneration, `oauth_clients.clientSecret for client '${row.id}'`);
     let scopes: string[] = [];
     try {
       scopes = JSON.parse(row.scopes);
-    } catch {}
+    } catch {
+      // scopes is stored as plaintext JSON; a malformed value is not a secret loss.
+    }
     return {
       id: row.id,
       ownerId: row.ownerId,
@@ -245,8 +398,8 @@ export class SQLiteStorage implements StorageAdapter {
   async saveUser(user: User): Promise<void> {
     const apiKeyHash = user.mcpApiKey ? this.hashApiKey(user.mcpApiKey) : null;
     const stmt = this.db.prepare(`
-      INSERT OR REPLACE INTO users (id, username, displayName, passwordHash, role, mcpApiKey, apiKeyHash, createdAt, updatedAt)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT OR REPLACE INTO users (id, username, displayName, passwordHash, role, mcpApiKey, apiKeyHash, encryptionKeyGeneration, createdAt, updatedAt)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     stmt.run(
       user.id,
@@ -254,8 +407,9 @@ export class SQLiteStorage implements StorageAdapter {
       user.displayName,
       user.passwordHash,
       user.role,
-      user.mcpApiKey ? this.encrypt(user.mcpApiKey) : null,
+      user.mcpApiKey ? this.encryptFor(user.mcpApiKey, user.id) : null,
       apiKeyHash,
+      this.encryptionKeyGeneration,
       user.createdAt,
       user.updatedAt
     );
@@ -278,8 +432,11 @@ export class SQLiteStorage implements StorageAdapter {
       const stmt = this.db.prepare('SELECT * FROM users WHERE apiKeyHash = ?');
       const row: any = stmt.get(apiKeyHash);
       if (!row) return null;
-      // Verify the actual key matches (constant-time comparison would be better but this is internal)
-      if (row.mcpApiKey && this.decrypt(row.mcpApiKey) === apiKey) return this.mapUser(row);
+      // The hash locates exactly one candidate. A hash match whose stored secret
+      // cannot be decrypted is corruption: it throws (naming the user) rather than
+      // being silently skipped as an "invalid key".
+      const stored = this.decryptOptional(row.mcpApiKey, row.id, row.encryptionKeyGeneration, `users.mcpApiKey for user '${row.id}'`);
+      if (stored !== null && stored === apiKey) return this.mapUser(row);
       return null;
     }
 
@@ -315,7 +472,7 @@ export class SQLiteStorage implements StorageAdapter {
       displayName: row.displayName,
       passwordHash: row.passwordHash,
       role: row.role,
-      mcpApiKey: row.mcpApiKey ? this.decrypt(row.mcpApiKey) : '',
+      mcpApiKey: this.decryptOptional(row.mcpApiKey, row.id, row.encryptionKeyGeneration, `users.mcpApiKey for user '${row.id}'`) ?? '',
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
     };
@@ -355,12 +512,18 @@ export class SQLiteStorage implements StorageAdapter {
   async getSettings(): Promise<Settings> {
     const stmt = this.db.prepare('SELECT data FROM settings WHERE id = ?');
     const row: any = stmt.get('global');
-    return row ? JSON.parse(row.data) : { updatedAt: Date.now() };
+    if (!row) return { updatedAt: Date.now() };
+    // The master key never comes from storage — only from MCP_ENCRYPTION_KEY.
+    // Drop it defensively if a legacy row still carries one.
+    const { encryptionKey: _discarded, ...rest } = JSON.parse(row.data);
+    return rest;
   }
 
   async saveSettings(settings: Settings): Promise<void> {
+    // Strip the master key: it must never be persisted beside the data it protects.
+    const { encryptionKey: _discarded, ...persisted } = settings;
     const stmt = this.db.prepare('INSERT OR REPLACE INTO settings (id, data) VALUES (?, ?)');
-    stmt.run('global', JSON.stringify({ ...settings, updatedAt: Date.now() }));
+    stmt.run('global', JSON.stringify({ ...persisted, updatedAt: Date.now() }));
   }
 
   // --- OAuth state ---

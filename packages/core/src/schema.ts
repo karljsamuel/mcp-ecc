@@ -15,6 +15,8 @@ interface TableDefinition {
 
 // Version 1 is frozen at the pre-ledger schema. Evolve it with new migrations,
 // not edits to these definitions. Version 2 reconciles historical missing columns.
+// Version 3 adds the API-key hash index. Version 4 records the credential
+// encryption key generation per encrypted row (rotatable; never in the blob).
 export const STORAGE_SCHEMA: readonly TableDefinition[] = [
   {
     name: "users",
@@ -255,6 +257,15 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigration[] = [
     { table: 'users', name: 'apiKeyHash', definition: 'TEXT', backends: ['sqlite', 'd1'] },
   ], statements: (backend) => [
     `CREATE INDEX IF NOT EXISTS idx_users_api_key_hash ON ${backend === 'sqlite' ? 'users' : 'users'} (apiKeyHash)`
+  ] },
+  // v4: which credential-encryption key generation produced each encrypted
+  // value. Existing rows default to generation 1. Rotation writes a higher
+  // generation and re-encrypts in batches; both stay readable during a
+  // changeover because the generation lives in the row, not in the blob.
+  { version: 4, name: 'credential-key-generation', columns: [
+    { table: 'accounts', name: { sqlite: 'encryptionKeyGeneration', d1: 'encryption_key_generation' }, definition: 'INTEGER NOT NULL DEFAULT 1' },
+    { table: 'oauth_clients', name: { sqlite: 'encryptionKeyGeneration', d1: 'encryption_key_generation' }, definition: 'INTEGER NOT NULL DEFAULT 1' },
+    { table: 'users', name: { sqlite: 'encryptionKeyGeneration', d1: 'encryption_key_generation' }, definition: 'INTEGER NOT NULL DEFAULT 1' },
   ] },
 ];
 
