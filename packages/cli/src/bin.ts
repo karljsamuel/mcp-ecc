@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-import 'dotenv/config';
 import { program } from 'commander';
 import chalk from 'chalk';
 import readline from 'readline';
@@ -8,67 +7,141 @@ import { randomUUID } from 'crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from 'fs';
 import { execFile, spawn } from 'child_process';
 import * as path from 'path';
-import { AuthService, OAuthManager, OAuthClient, ProviderName } from '@mcp-ecc/core';
+import {
+  AuthService,
+  OAuthManager,
+  OAuthClient,
+  ProviderName,
+  checkConfig,
+  getEncryptionKey,
+  loadEnv,
+  resolveEnvPath,
+  runSetup,
+  SetupRequiredError,
+  type DBConnectionProbe,
+  type SetupD1Config,
+  type SetupIO,
+  type SetupPromptOptions,
+} from '@mcp-ecc/core';
 import { McpEccServer } from '@mcp-ecc/mcp-server';
+
+// Load .env before anything else. core's loadEnv honours MCP_ENV_FILE, so a
+// global install, a local checkout and a container all resolve the same file.
+let envLoaded = false;
+function ensureEnvLoaded(): void {
+  if (envLoaded) return;
+  envLoaded = true;
+  loadEnv();
+}
+ensureEnvLoaded();
 
 const env = (name: string): string | undefined => process.env[name]?.trim();
 
-const ENCRYPTION_KEY = env('MCP_ENCRYPTION_KEY') || 'default-secret-key';
 const PACKAGE_VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version as string;
-const DB_PROVIDER = env('MCP_DB_PROVIDER') || env('DB_PROVIDER');
 
-if (!DB_PROVIDER) {
-  console.error(chalk.red('[mcp-ecc] Critical Error: MCP_DB_PROVIDER is not set. Please set MCP_DB_PROVIDER to either "sqlite" or "d1" in your environment.'));
-  process.exit(1);
-}
+// --- Lazy runtime wiring ---------------------------------------------------
+//
+// NOTHING here runs at import time any more. `mcp-ecc setup` has to work on a
+// completely unconfigured install, so configuration and storage are resolved
+// inside the command that needs them (initStorage()).
 
-if (DB_PROVIDER !== 'sqlite' && DB_PROVIDER !== 'd1') {
-  console.error(chalk.red(`[mcp-ecc] Critical Error: Invalid MCP_DB_PROVIDER value: "${DB_PROVIDER}". Allowed values are "sqlite" or "d1".`));
-  process.exit(1);
-}
-
-let storage: any;
+let storage: any = null;
 let storageName = 'sqlite';
 let dbDir = process.cwd();
+let authService: AuthService | null = null;
+let oauthManager: OAuthManager | null = null;
 
-if (DB_PROVIDER === 'd1') {
-  const { D1Storage, CloudflareD1Database } = await import('@mcp-ecc/storage-d1');
-  const accountId = env('CLOUDFLARE_ACCOUNT_ID');
-  const databaseId = env('CLOUDFLARE_DATABASE_ID');
-  const apiToken = env('CLOUDFLARE_API_TOKEN');
-  if (!accountId || !databaseId || !apiToken) {
-    console.error(chalk.red('Error: D1 storage selected but CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_DATABASE_ID, or CLOUDFLARE_API_TOKEN is missing.'));
-    process.exit(1);
+function requireEncryptionKey(): string {
+  const key = getEncryptionKey();
+  if (!key) {
+    throw new SetupRequiredError(
+      'MCP_ENCRYPTION_KEY is not set. Run `mcp-ecc setup` to generate one.',
+      'missing-encryption-key',
+    );
   }
-  const db = new CloudflareD1Database(accountId, databaseId, apiToken);
-  storage = new D1Storage(db, ENCRYPTION_KEY);
-  storageName = 'cloudflare-d1';
-  dbDir = path.join(process.cwd(), 'data'); // fallback for config storage
-  if (!existsSync(dbDir)) {
-    mkdirSync(dbDir, { recursive: true });
+  return key;
+}
+
+// Construct a storage adapter from an explicit configuration. Shared by the
+// setup engine and the normal command path.
+async function createCliStorage(cfg: {
+  dbProvider: string;
+  dbConfig: Record<string, string>;
+  encryptionKey: string;
+}): Promise<any> {
+  if (cfg.dbProvider === 'd1') {
+    const { D1Storage, CloudflareD1Database } = await import('@mcp-ecc/storage-d1');
+    const db = new CloudflareD1Database(
+      cfg.dbConfig.CLOUDFLARE_ACCOUNT_ID,
+      cfg.dbConfig.CLOUDFLARE_DATABASE_ID,
+      cfg.dbConfig.CLOUDFLARE_API_TOKEN,
+    );
+    const d1Storage = new D1Storage(db, cfg.encryptionKey);
+    await d1Storage.initSchema();
+    return d1Storage;
   }
-  
-  // Automatically initialize schema on Cloudflare D1
-  await storage.initSchema();
-} else {
-  const STORAGE_FILE = env('MCP_STORAGE_FILE');
-  if (!STORAGE_FILE) {
-    console.error(chalk.red('[mcp-ecc] Critical Error: sqlite provider selected but MCP_STORAGE_FILE is not set. Please configure the database file path.'));
-    process.exit(1);
+  const { SQLiteStorage } = await import('@mcp-ecc/storage-sqlite');
+  return new SQLiteStorage(cfg.dbConfig.MCP_STORAGE_FILE, cfg.encryptionKey);
+}
+
+// Resolve configuration + storage for a command that needs the database.
+// Throws SetupRequiredError when the install is not configured yet.
+async function initStorage(): Promise<void> {
+  if (storage) return;
+
+  ensureEnvLoaded();
+  const check = checkConfig();
+  const provider = (check.dbProvider || '').trim();
+  if (!check.valid || (provider !== 'sqlite' && provider !== 'd1')) {
+    const missing = check.missing.length > 0
+      ? check.missing.join(', ')
+      : `MCP_DB_PROVIDER must be "sqlite" or "d1" (got "${check.dbProvider}")`;
+    throw new SetupRequiredError(`mcp-ecc is not configured yet: ${missing}. Run \`mcp-ecc setup\`.`, 'not-configured');
   }
-  dbDir = path.dirname(STORAGE_FILE);
+
+  const dbProvider = provider as 'sqlite' | 'd1';
+  const dbConfig: Record<string, string> = dbProvider === 'd1'
+    ? {
+        CLOUDFLARE_ACCOUNT_ID: env('CLOUDFLARE_ACCOUNT_ID') || '',
+        CLOUDFLARE_DATABASE_ID: env('CLOUDFLARE_DATABASE_ID') || '',
+        CLOUDFLARE_API_TOKEN: env('CLOUDFLARE_API_TOKEN') || '',
+      }
+    : { MCP_STORAGE_FILE: env('MCP_STORAGE_FILE') || '' };
+
+  storageName = dbProvider === 'd1' ? 'cloudflare-d1' : 'sqlite';
+  dbDir = dbProvider === 'd1' ? path.join(process.cwd(), 'data') : path.dirname(dbConfig.MCP_STORAGE_FILE);
   if (!existsSync(dbDir)) {
     mkdirSync(dbDir, { recursive: true });
     console.error(chalk.cyan(`[mcp-ecc] Created database directory at ${dbDir}`));
   }
-  const { SQLiteStorage } = await import('@mcp-ecc/storage-sqlite');
-  storage = new SQLiteStorage(STORAGE_FILE, ENCRYPTION_KEY);
+
+  storage = await createCliStorage({ dbProvider, dbConfig, encryptionKey: requireEncryptionKey() });
+  authService = new AuthService(storage);
+  oauthManager = new OAuthManager(storage);
 }
 
-const authService = new AuthService(storage);
-const oauthManager = new OAuthManager(storage);
+function auth(): AuthService {
+  if (!authService) throw new Error('Storage is not initialised yet.');
+  return authService;
+}
 
-const SESSION_FILE = path.join(dbDir, 'cli-session.json');
+function oauth(): OAuthManager {
+  if (!oauthManager) throw new Error('Storage is not initialised yet.');
+  return oauthManager;
+}
+
+function sessionFile(): string {
+  return path.join(dbDir, 'cli-session.json');
+}
+
+function handleFatal(error: unknown): never {
+  if (error instanceof SetupRequiredError) {
+    console.error(chalk.red(`\n[mcp-ecc] ${error.message}\n`));
+    process.exit(1);
+  }
+  console.error(chalk.red(`\n[mcp-ecc] Error: ${error instanceof Error ? error.message : String(error)}\n`));
+  process.exit(1);
+}
 
 interface SessionData {
   userId: string;
@@ -76,26 +149,29 @@ interface SessionData {
 
 function getSession(): SessionData | null {
   try {
-    if (existsSync(SESSION_FILE)) {
-      return JSON.parse(readFileSync(SESSION_FILE, 'utf8'));
+    const file = sessionFile();
+    if (existsSync(file)) {
+      return JSON.parse(readFileSync(file, 'utf8'));
     }
   } catch {}
   return null;
 }
 
 function saveSession(userId: string): void {
-  writeFileSync(SESSION_FILE, JSON.stringify({ userId }), 'utf8');
+  writeFileSync(sessionFile(), JSON.stringify({ userId }), 'utf8');
 }
 
 function clearSession(): void {
   try {
-    if (existsSync(SESSION_FILE)) {
-      unlinkSync(SESSION_FILE);
+    const file = sessionFile();
+    if (existsSync(file)) {
+      unlinkSync(file);
     }
   } catch {}
 }
 
 async function getLoggedInUser(): Promise<any | null> {
+  await initStorage();
   const sess = getSession();
   if (!sess) return null;
   const user = await storage.getUser(sess.userId);
@@ -103,6 +179,7 @@ async function getLoggedInUser(): Promise<any | null> {
 }
 
 async function ensureAuthenticated() {
+  await initStorage();
   const userCount = await storage.countUsers();
   if (userCount === 0) {
     console.log(chalk.yellow('\nNo user accounts found. Please create the first admin account to get started.\n'));
@@ -161,7 +238,158 @@ const askPassword = (rl: readline.Interface, query: string): Promise<string> => 
   });
 };
 
+// --- First-run setup (CLI surface) -----------------------------------------
+//
+// The setup engine lives in @mcp-ecc/core; this is only the terminal
+// implementation of its SetupIO.
+
+interface CliSetupIO {
+  io: SetupIO;
+  close: () => void;
+}
+
+function createCliSetupIO(): CliSetupIO {
+  // Two input modes:
+  //  - a real terminal: readline, so secrets can be masked;
+  //  - piped/redirected input (`mcp-ecc setup < answers.txt`): a plain line
+  //    queue. readline's question() callback never fires once stdin hits EOF,
+  //    which used to make a scripted run exit silently mid-flow. With the queue,
+  //    EOF simply yields an empty answer and the engine's validation reports it.
+  const interactive = Boolean(process.stdin.isTTY);
+  const rl = interactive ? readline.createInterface({ input: process.stdin, output: process.stdout }) : null;
+
+  const queue: string[] = [];
+  let partial = '';
+  let closed = false;
+  let waiter: ((line: string) => void) | null = null;
+
+  const onData = (chunk: string) => {
+    partial += chunk;
+    for (let idx = partial.indexOf('\n'); idx >= 0; idx = partial.indexOf('\n')) {
+      const line = partial.slice(0, idx).replace(/\r$/, '');
+      partial = partial.slice(idx + 1);
+      if (waiter) {
+        const resolve = waiter;
+        waiter = null;
+        resolve(line);
+      } else {
+        queue.push(line);
+      }
+    }
+  };
+  const onEnd = () => {
+    closed = true;
+    if (waiter) {
+      const resolve = waiter;
+      waiter = null;
+      resolve('');
+    }
+  };
+
+  if (!interactive) {
+    process.stdin.setEncoding('utf8');
+    process.stdin.on('data', onData);
+    process.stdin.on('end', onEnd);
+    process.stdin.resume();
+  }
+
+  const readLine = (promptText: string, secret: boolean): Promise<string> => {
+    if (interactive && rl) {
+      return secret ? askPassword(rl, promptText) : askQuestion(rl, promptText);
+    }
+    process.stdout.write(promptText);
+    if (queue.length > 0) return Promise.resolve(queue.shift() as string);
+    if (closed) return Promise.resolve('');
+    return new Promise<string>((resolve) => { waiter = resolve; });
+  };
+
+  const withDefault = (raw: string, fallback?: string): string => {
+    const trimmed = raw.trim();
+    if (trimmed === '' && fallback !== undefined) return fallback;
+    return trimmed;
+  };
+
+  const io: SetupIO = {
+    info: (message) => console.log(message),
+    warn: (message) => console.log(chalk.yellow(message)),
+    error: (message) => console.error(chalk.red(message)),
+    progress: (message) => console.log(chalk.gray(message)),
+
+    async confirm(question, defaultValue = false) {
+      const suffix = defaultValue ? ' [Y/n]: ' : ' [y/N]: ';
+      const answer = (await readLine(question + suffix, false)).trim().toLowerCase();
+      if (!answer) return defaultValue;
+      return answer === 'y' || answer === 'yes';
+    },
+
+    async prompt(question, options: SetupPromptOptions = {}) {
+      if (options.choices && options.choices.length > 0) {
+        console.log(question);
+        options.choices.forEach((choice, index) => {
+          const suffix = choice.description ? ` — ${choice.description}` : '';
+          console.log(`  ${index + 1}. ${choice.label}${suffix}`);
+        });
+        const hint = options.default ? ` (default ${options.default})` : '';
+        const answer = (await readLine(`Choice [1-${options.choices.length}]${hint}: `, false)).trim();
+        if (!answer) return options.default ?? options.choices[0].value;
+        const index = Number(answer);
+        if (Number.isInteger(index) && index >= 1 && index <= options.choices.length) {
+          return options.choices[index - 1].value;
+        }
+        const byValue = options.choices.find((choice) => choice.value === answer);
+        return byValue ? byValue.value : answer;
+      }
+
+      const raw = await readLine(question, Boolean(options.secret));
+      return withDefault(raw, options.default);
+    },
+  };
+
+  const close = () => {
+    if (rl) {
+      rl.close();
+      return;
+    }
+    process.stdin.removeListener('data', onData);
+    process.stdin.removeListener('end', onEnd);
+    process.stdin.pause();
+  };
+
+  return { io, close };
+}
+
+async function handleSetup(options: { envFile?: string }): Promise<void> {
+  const { io, close } = createCliSetupIO();
+  try {
+    let createD1Probe: ((cfg: SetupD1Config) => DBConnectionProbe) | undefined;
+    try {
+      const { CloudflareD1Database } = await import('@mcp-ecc/storage-d1');
+      createD1Probe = (cfg) => new CloudflareD1Database(cfg.accountId, cfg.databaseId, cfg.apiToken) as unknown as DBConnectionProbe;
+    } catch {
+      io.warn('Cloudflare D1 support is not available in this installation.');
+    }
+
+    const result = await runSetup(io, {
+      envPath: options.envFile || resolveEnvPath(),
+      // The CLI always writes the file. In a container, point MCP_ENV_FILE at a
+      // mounted volume so the file survives a recreate.
+      writeEnv: true,
+      returnEnvContent: false,
+      createStorage: (cfg) => createCliStorage(cfg),
+      createD1Probe,
+    });
+
+    if (!result) process.exitCode = 1;
+  } catch (error) {
+    io.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  } finally {
+    close();
+  }
+}
+
 async function handleLogin(): Promise<void> {
+  await initStorage();
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   try {
     const userCount = await storage.countUsers();
@@ -175,7 +403,7 @@ async function handleLogin(): Promise<void> {
       if (password !== confirm) {
         throw new Error('Passwords do not match');
       }
-      const user = await authService.createUser({
+      const user = await auth().createUser({
         username: username.trim(),
         displayName: displayName.trim() || undefined,
         password,
@@ -188,7 +416,7 @@ async function handleLogin(): Promise<void> {
       const username = await askQuestion(rl, 'Username: ');
       if (!username.trim()) throw new Error('Username required');
       const password = await askPassword(rl, 'Password: ');
-      const user = await authService.authenticate(username.trim(), password);
+      const user = await auth().authenticate(username.trim(), password);
       saveSession(user.id);
       console.log(chalk.green(`\n✔ Successfully logged in as ${user.displayName} (@${user.username})\n`));
     }
@@ -222,7 +450,7 @@ async function handleAddUser(): Promise<void> {
     const roleChoice = await askQuestion(rl, 'Choose option [2]: ') || '2';
     const role: 'admin' | 'user' = roleChoice === '1' ? 'admin' : 'user';
 
-    const user = await authService.createUser({
+    const user = await auth().createUser({
       username: username.trim(),
       displayName: displayName.trim() || undefined,
       password,
@@ -259,7 +487,7 @@ async function handlePasswordChange(): Promise<void> {
     if (newPassword !== confirm) {
       throw new Error('New passwords do not match');
     }
-    await authService.changePassword(currentUser.id, currentPassword, newPassword);
+    await auth().changePassword(currentUser.id, currentPassword, newPassword);
     console.log(chalk.green('\n✔ Password updated successfully.\n'));
   } catch (err: any) {
     console.error(chalk.red(`\nError: ${err.message}\n`));
@@ -670,7 +898,7 @@ async function runOAuthFlow(client: OAuthClient, provider: string, accountName: 
 
   // Microsoft and Zoho device flow (Zoho: Non-browser application client)
   console.log(`\nInitiating Device Authorization Flow for ${provider}...`);
-  const flowRes = await oauthManager.startFlow(provider as any, 'device_code', OAuthManager.clientToConfig(client, ''));
+  const flowRes = await oauth().startFlow(provider as any, 'device_code', OAuthManager.clientToConfig(client, ''));
 
   console.log('\n==================================================');
   console.log(`1. Go to: ${chalk.cyan(flowRes.verificationUri)}`);
@@ -678,7 +906,7 @@ async function runOAuthFlow(client: OAuthClient, provider: string, accountName: 
   console.log('==================================================\n');
   console.log('Waiting for user authorization in the browser...');
 
-  return oauthManager.pollDeviceCode(flowRes.deviceCode, flowRes.interval, OAuthManager.clientToConfig(client, ''));
+  return oauth().pollDeviceCode(flowRes.deviceCode, flowRes.interval, OAuthManager.clientToConfig(client, ''));
 }
 
 async function handleEditAccount(): Promise<void> {
@@ -1091,6 +1319,7 @@ function printBanner(): void {
 }
 
 const TUI_COMMANDS = [
+  ['setup', 'Configure the database and write .env'],
   ['login', 'Log in to a user account'],
   ['status', 'Show current login session status'],
   ['password', 'Update password for currently logged-in user'],
@@ -1174,6 +1403,12 @@ program
   .version(PACKAGE_VERSION);
 
 program
+  .command('setup')
+  .description('First-run setup: choose the database, verify it, and write .env')
+  .option('--env-file <path>', 'Where to write the configuration (default: MCP_ENV_FILE or ./.env)')
+  .action(handleSetup);
+
+program
   .command('login')
   .description('Log into user account or bootstrap first admin account')
   .action(handleLogin);
@@ -1237,5 +1472,5 @@ const hasArgs = process.argv.slice(2).length > 0;
 if (!hasArgs) {
   runTui();
 } else {
-  program.parseAsync(process.argv).catch(console.error);
+  program.parseAsync(process.argv).catch(handleFatal);
 }

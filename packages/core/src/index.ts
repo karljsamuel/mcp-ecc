@@ -10,3 +10,6 @@ export { generateId, sanitizeForLog, delay, retry, slugify, generateSlug } from 
 
 // Configuration utilities
 export * from './config.js';
+
+// First-run setup engine (shared by the CLI and the management API)
+export * from './setup.js';
