@@ -1,4 +1,5 @@
 import { google } from 'googleapis';
+import { UNKNOWN_COUNT } from '@mcp-ecc/core';
 import type {
   AccountCredentials,
   IMailProvider,
@@ -13,6 +14,7 @@ import type {
   EmailAddress,
   EmailAttachment,
   ListMessagesOptions,
+  ListFoldersOptions,
   SearchOptions,
   SendMessageInput,
   ListEventsOptions,
@@ -62,48 +64,106 @@ export class GoogleProvider implements IMailProvider, ICalendarProvider, IContac
 
   // --- IMailProvider ---
 
-  async listFolders(): Promise<MailFolder[]> {
+  async listFolders(options: ListFoldersOptions = {}): Promise<MailFolder[]> {
     await this.ensureFreshToken();
+
+    // ONE request. `users.labels.list` returns `messagesUnread` and `messagesTotal` for EVERY
+    // label, system labels included, so no extra call is needed or made:
+    //  - the old `users.messages.list({labelIds:['INBOX'], q:'is:unread'})` probe is gone. It was
+    //    redundant (the INBOX label already carries an exact count) and less accurate
+    //    (resultSizeEstimate is documented as an estimate);
+    //  - system folders SENT/DRAFT/TRASH/SPAM/STARRED now report their real counts instead of a
+    //    hardcoded 0.
+    // `options.withUnreadCounts` needs no special handling here: the counts cost nothing extra,
+    // so the cheap path and the exact path are the same single round-trip.
     const res = await this.gmail.users.labels.list({ userId: 'me' });
     const labels = res.data.labels || [];
-
-    // Get unread count for INBOX using messages.list with is:unread query
-    // labels.get doesn't return messagesUnread for system labels like INBOX
-    let inboxUnread = 0;
-    try {
-      const msgRes = await this.gmail.users.messages.list({
-        userId: 'me',
-        labelIds: ['INBOX'],
-        q: 'is:unread',
-        maxResults: 1,
-      });
-      inboxUnread = msgRes.data.resultSizeEstimate || 0;
-    } catch (e) {
-      console.warn('Failed to fetch INBOX unread count:', e);
+    const byId = new Map<string, { messagesUnread?: number | null; messagesTotal?: number | null }>();
+    for (const label of labels) {
+      if (label.id) byId.set(label.id, label);
     }
 
-    const systemFolders: MailFolder[] = [
-      { id: 'INBOX', name: 'Inbox', type: 'inbox', unreadCount: inboxUnread, totalCount: 0, createdAt: 0, updatedAt: 0 },
-      { id: 'SENT', name: 'Sent', type: 'sent', unreadCount: 0, totalCount: 0, createdAt: 0, updatedAt: 0 },
-      { id: 'DRAFT', name: 'Drafts', type: 'drafts', unreadCount: 0, totalCount: 0, createdAt: 0, updatedAt: 0 },
-      { id: 'TRASH', name: 'Trash', type: 'trash', unreadCount: 0, totalCount: 0, createdAt: 0, updatedAt: 0 },
-      { id: 'SPAM', name: 'Spam', type: 'spam', unreadCount: 0, totalCount: 0, createdAt: 0, updatedAt: 0 },
-      { id: 'STARRED', name: 'Starred', type: 'custom', unreadCount: 0, totalCount: 0, createdAt: 0, updatedAt: 0 },
-    ];
+    const folders: MailFolder[] = [];
 
-    const customFolders: MailFolder[] = labels
-      .filter(l => !['INBOX', 'SENT', 'DRAFT', 'TRASH', 'SPAM', 'STARRED', 'UNREAD', 'IMPORTANT', 'CATEGORY_PERSONAL', 'CATEGORY_SOCIAL', 'CATEGORY_PROMOTIONS', 'CATEGORY_UPDATES', 'CATEGORY_FORUMS'].includes(l.id || ''))
-      .map(l => ({
-        id: l.id!,
-        name: l.name!,
-        type: 'custom' as const,
-        unreadCount: l.messagesUnread || 0,
-        totalCount: l.messagesTotal || 0,
+    for (const def of GoogleProvider.SYSTEM_FOLDERS) {
+      if (!this.matchesFolderFilter(def.id, def.name, options.folderId)) continue;
+      folders.push(this.buildFolder(def.id, def.name, def.type, byId.get(def.id)));
+    }
+
+    for (const label of labels) {
+      const id = label.id || '';
+      if (!id || !label.name) continue;
+      // System labels are either exposed above (SYSTEM_FOLDERS) or not folders at all.
+      if (label.type === 'system' || GoogleProvider.NON_FOLDER_LABELS.has(id)) continue;
+      if (!this.matchesFolderFilter(id, label.name, options.folderId)) continue;
+      folders.push(this.buildFolder(id, label.name, 'custom', label));
+    }
+
+    return folders;
+  }
+
+  /**
+   * Gmail system labels that are surfaced as folders, in a stable order. STARRED used to be typed
+   * 'custom', which claimed a user-created folder; it is a Gmail-provided system view, so it is
+   * typed 'starred'.
+   */
+  private static readonly SYSTEM_FOLDERS: ReadonlyArray<{ id: string; name: string; type: MailFolder['type'] }> = [
+    { id: 'INBOX', name: 'Inbox', type: 'inbox' },
+    { id: 'SENT', name: 'Sent', type: 'sent' },
+    { id: 'DRAFT', name: 'Drafts', type: 'drafts' },
+    { id: 'TRASH', name: 'Trash', type: 'trash' },
+    { id: 'SPAM', name: 'Spam', type: 'spam' },
+    { id: 'STARRED', name: 'Starred', type: 'starred' },
+  ];
+
+  /** Gmail labels that are message attributes or views, not mail folders. */
+  private static readonly NON_FOLDER_LABELS = new Set<string>([
+    'UNREAD',
+    'IMPORTANT',
+    'CHAT',
+    'CATEGORY_PERSONAL',
+    'CATEGORY_SOCIAL',
+    'CATEGORY_PROMOTIONS',
+    'CATEGORY_UPDATES',
+    'CATEGORY_FORUMS',
+  ]);
+
+  private matchesFolderFilter(id: string, name: string, folderId?: string): boolean {
+    if (!folderId) return true;
+    const wanted = folderId.trim().toLowerCase();
+    return id.toLowerCase() === wanted || name.toLowerCase() === wanted;
+  }
+
+  private buildFolder(
+    id: string,
+    name: string,
+    type: MailFolder['type'],
+    label?: { messagesUnread?: number | null; messagesTotal?: number | null } | null
+  ): MailFolder {
+    if (!label) {
+      // The label is missing from labels.list, so there is no count to report. Saying 0 here
+      // would claim the folder is empty.
+      return {
+        id,
+        name,
+        type,
+        unreadCount: UNKNOWN_COUNT,
+        totalCount: UNKNOWN_COUNT,
+        unreadCountError: 'label missing from Gmail labels.list response',
         createdAt: 0,
         updatedAt: 0,
-      }));
+      };
+    }
 
-    return [...systemFolders, ...customFolders];
+    return {
+      id,
+      name,
+      type,
+      unreadCount: typeof label.messagesUnread === 'number' ? label.messagesUnread : 0,
+      totalCount: typeof label.messagesTotal === 'number' ? label.messagesTotal : 0,
+      createdAt: 0,
+      updatedAt: 0,
+    };
   }
 
   async listMessages(folderId: string, options: ListMessagesOptions = {}): Promise<PaginatedResult<EmailMessage>> {

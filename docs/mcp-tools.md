@@ -29,13 +29,33 @@ Trigger a sync for an account (placeholder in the current build).
 
 *Input:* `{ "accountId": "...", "types": ["mail","calendar","contacts"] }`
 
+Mail sync lists folders with `withUnreadCounts: false` (it crawls every folder's messages immediately afterwards, so folder unread counts are not needed), so folder rows written during a sync may carry `unreadCount: -1`. Call `mail.listFolders` or read the `mail/folders` resource for exact counts.
+
 ## mail.*
 
 Available for Google, Microsoft, Zoho and IMAP/SMTP. Not for CalDAV/CardDAV-only accounts.
 
 ### `mail.listFolders`
-*Input:* `{ "accountId": "..." }`
-*Output:* folders with `{ id, name, type, unreadCount, totalCount }`
+*Input:* `{ "accountId": "...", "folderId": "optional", "withUnreadCounts": true }`
+*Output:* folders with `{ id, name, parentId, type, unreadCount, totalCount, unreadCountError? }` — plus `folders` omitted for non-mail accounts.
+
+Getting unread counts right:
+
+- **Default (`withUnreadCounts` omitted or `true`)** returns an **exact unread count for every folder**. Where a provider can only answer by measuring, it does so (bounded — see per-provider notes below) and never substitutes a global total.
+- **`folderId`** restricts the answer to one folder (matched by id, or case-insensitively by name) and returns that folder's exact count. This is the cheap single-folder probe: one folder-list request plus at most one count lookup (empty `folders` array if nothing matches).
+- **`withUnreadCounts: false`** is the cheap, name-only path: one round-trip and no per-folder measurement. On providers whose folder response already contains an authoritative count (Gmail labels, Graph `mailFolders`) that count is still returned, because it costs nothing; otherwise `unreadCount` is `-1`.
+- **`unreadCount: -1` (and `totalCount: -1`) means "not determined"**, never "empty". `0` always means the provider actually checked and the folder is empty. When a measurement was attempted and failed, `unreadCountError` explains why (e.g. a folder larger than the scan cap), which distinguishes it from "counts were not requested".
+
+Per provider:
+
+| Provider | Exact count source | Cost |
+| --- | --- | --- |
+| Google | `users.labels.list` → `messagesUnread` for every label, system labels included (STARRED is `type: "starred"`) | 1 request, no extras |
+| Microsoft | Graph `mailFolder.unreadItemCount` (`totalItemCount` for `totalCount`) | 1 request per 100 folders (pagination followed) |
+| Zoho | pages through the folder's messages, counting `status === "0"` | ≤ 10 pages (2000 messages) per folder, 4 folders in parallel, 20s budget |
+| IMAP/SMTP | `LIST` with `statusQuery {unseen, messages}` (LIST-STATUS / IMAP4rev2) | 1 round-trip; on servers without LIST-STATUS, one `STATUS` per folder through a 5-way pool under a 20s budget |
+
+IMAP note: the connection is reused across calls (no connect/logout per call), timeouts are explicit (20s connect, 10s greeting, 60s socket), and the folder list is cached for 30s.
 
 ### `mail.listMessages`
 *Input:* `{ "accountId": "...", "folderId": "INBOX", "limit": 20, "cursor": "optional", "query": "optional" }`
@@ -121,6 +141,8 @@ Available for Google, Microsoft, Zoho and CardDAV.
 
 The server also exposes a `today-agenda` resource per account:
 `mcp-ecc://{accountId}/today-agenda` — a markdown summary of today's events plus recent unread mail. Fetch it via a client's `resources/read`.
+
+A `mail/folders` resource per account returns the exact per-folder unread counts as JSON (`mcp-ecc://{accountId}/mail/folders`).
 
 ## Prompts
 
