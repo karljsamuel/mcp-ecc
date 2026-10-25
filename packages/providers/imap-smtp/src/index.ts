@@ -2,6 +2,7 @@ import { ImapFlow } from 'imapflow';
 import type { ListResponse, StatusObject } from 'imapflow';
 import { simpleParser } from 'mailparser';
 import nodemailer from 'nodemailer';
+import type { TransportOptions } from 'nodemailer';
 import { UNKNOWN_COUNT } from '@mcp-ecc/core';
 import type {
   AccountCredentials,
@@ -36,7 +37,7 @@ interface FolderUnreadMeasurement {
 
 export class ImapSmtpProvider implements IMailProvider, ICalendarProvider, IContactsProvider {
   private imapConfig: ConstructorParameters<typeof ImapFlow>[0];
-  private smtpConfig: nodemailer.TransportOptions;
+  private smtpConfig: TransportOptions;
 
   /** Shared IMAP connection: connected lazily, reused across calls, dropped on error/idle. */
   private imapClient: ImapFlow | null = null;
@@ -85,7 +86,7 @@ export class ImapSmtpProvider implements IMailProvider, ICalendarProvider, ICont
         pass: credentials.appPassword || '',
       },
       tls: { rejectUnauthorized: false },
-    } as nodemailer.TransportOptions;
+    } as TransportOptions;
   }
 
   /**
