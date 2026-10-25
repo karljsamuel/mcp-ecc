@@ -14,7 +14,11 @@
     "sourceMap": true,
     "composite": true,
     "incremental": true,
-    "tsBuildInfoFile": ".tsbuildinfo"
+    "tsBuildInfoFile": ".tsbuildinfo",
+    "baseUrl": ".",
+    "paths": {
+      "@mcp-ecc/*": ["packages/*/src"]
+    }
   },
   "exclude": ["node_modules", "dist", "packages/*/dist", "packages/*/node_modules"]
 }

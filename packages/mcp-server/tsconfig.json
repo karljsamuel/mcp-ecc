@@ -29,5 +29,14 @@
     "types": ["node"]
   },
   "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist"]
+  "exclude": ["node_modules", "dist"],
+  "references": [
+    { "path": "../core" },
+    { "path": "../providers/google" },
+    { "path": "../providers/microsoft" },
+    { "path": "../providers/zoho" },
+    { "path": "../providers/imap-smtp" },
+    { "path": "../providers/caldav" },
+    { "path": "../providers/carddav" }
+  ]
 }

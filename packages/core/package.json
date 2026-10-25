@@ -2,13 +2,13 @@
   "name": "@mcp-ecc/core",
   "version": "0.6.0",
   "description": "Core types, interfaces, and utilities for mcp-ecc",
-  "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "import": "./dist/index.js",
+      "require": "./dist/index.js"
     }
   },
   "scripts": {
@@ -19,6 +19,7 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
+    "dotenv": "^17.4.2",
     "zod": "^4.5.2"
   },
   "devDependencies": {
