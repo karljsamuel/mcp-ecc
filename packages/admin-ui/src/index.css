@@ -1,6 +1,8 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+
+/* Tailwind 4 is CSS-first; this pulls in the existing JS config so the content
+   globs and any theme extension keep working. */
+@config "../tailwind.config.js";
 
 @layer base {
   html {
@@ -11,21 +13,29 @@
   }
 }
 
+/* Tailwind 4's @apply only composes utilities, not other custom classes, so the
+   shared button base is repeated in each variant. The markup uses the variant
+   class on its own (never "btn btn-primary"), so this cannot be factored out
+   with an extra class name without changing every call site. */
 @layer components {
-  .btn {
+  .btn,
+  .btn-primary,
+  .btn-secondary,
+  .btn-danger,
+  .btn-ghost {
     @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition focus:outline-none focus:ring-2 focus:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-50;
   }
   .btn-primary {
-    @apply btn bg-indigo-600 text-white hover:bg-indigo-700 focus:ring-indigo-500;
+    @apply bg-indigo-600 text-white hover:bg-indigo-700 focus:ring-indigo-500;
   }
   .btn-secondary {
-    @apply btn bg-white text-slate-700 border border-slate-300 hover:bg-slate-50 focus:ring-slate-400;
+    @apply bg-white text-slate-700 border border-slate-300 hover:bg-slate-50 focus:ring-slate-400;
   }
   .btn-danger {
-    @apply btn bg-red-600 text-white hover:bg-red-700 focus:ring-red-500;
+    @apply bg-red-600 text-white hover:bg-red-700 focus:ring-red-500;
   }
   .btn-ghost {
-    @apply btn text-slate-600 hover:bg-slate-100;
+    @apply text-slate-600 hover:bg-slate-100;
   }
   .input {
     @apply w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm placeholder-slate-400 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500;
