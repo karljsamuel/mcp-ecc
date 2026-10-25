@@ -17,7 +17,7 @@
     "url": "https://github.com/karljsamuel/mcp-ecc.git"
   },
   "engines": {
-    "node": ">=24.0.0"
+    "node": ">=26.0.0"
   },
   "scripts": {
     "build": "tsc",
@@ -37,7 +37,7 @@
   },
   "devDependencies": {
     "typescript": "^5.9.3",
-    "@types/node": "^24.0.0",
+    "@types/node": "^26.6.5",
     "vitest": "^4.1.11",
     "eslint": "^10.9.1"
   },

@@ -7,7 +7,7 @@
 #
 # .dockerignore excludes node_modules/dist/.git so the workspace copies cleanly.
 
-FROM node:24-alpine AS builder
+FROM node:26-alpine AS builder
 WORKDIR /app
 RUN apk upgrade --no-cache && apk add --no-cache python3 make g++ && npm install -g turbo
 
@@ -20,7 +20,7 @@ RUN npm ci --legacy-peer-deps
 RUN npx turbo run build
 
 # --- runner: minimal image, production deps only ---
-FROM node:24-alpine AS runner
+FROM node:26-alpine AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production
