@@ -17,7 +17,6 @@
     "tsBuildInfoFile": ".tsbuildinfo",
     "outDir": "./dist",
     "rootDir": "./src",
-    "baseUrl": ".",
     "paths": {
       "@mcp-ecc/provider-google": ["../providers/google/dist"],
       "@mcp-ecc/provider-microsoft": ["../providers/microsoft/dist"],

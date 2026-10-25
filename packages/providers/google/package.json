@@ -23,7 +23,7 @@
     "googleapis": "^188.0.0"
   },
   "devDependencies": {
-    "typescript": "^5.9.3",
+    "typescript": "^7.0.2",
     "@types/node": "^26.6.5",
     "vitest": "^5.0.5",
     "eslint": "^10.9.1"
