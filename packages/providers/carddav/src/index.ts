@@ -105,6 +105,15 @@ export class CardDAVProvider implements IContactsProvider {
     return books;
   }
 
+  /**
+   * Cheap reachability and auth probe: discovers the address books but fetches
+   * no vCards. Used by the periodic health sweep, which only needs to know the
+   * server answers and that the stored credentials are accepted.
+   */
+  async probe(): Promise<void> {
+    await this.getAddressBooks();
+  }
+
   async listContacts(options: ListContactsOptions = {}): Promise<PaginatedResult<Contact>> {
     const books = await this.getAddressBooks();
     const contacts: Contact[] = [];

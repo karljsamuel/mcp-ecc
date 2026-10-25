@@ -302,6 +302,12 @@ export class ImapSmtpProvider implements IMailProvider, ICalendarProvider, ICont
           }
           try {
             const status = await client.status(box.path, { unseen: true, messages: true });
+            if (!status) {
+              // imapflow 2 returns false when STATUS fails or the server declines.
+              // Treat that as unknown rather than reporting an empty folder.
+              results.set(box.path, { error: 'STATUS returned no data for this folder' });
+              continue;
+            }
             results.set(box.path, {
               unread: typeof status.unseen === 'number' ? status.unseen : undefined,
               total: typeof status.messages === 'number' ? status.messages : undefined,

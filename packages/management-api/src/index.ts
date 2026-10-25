@@ -220,8 +220,7 @@ export class ManagementApi {
    *  - zoho      : account + folder resolution + one messages/view page
    *  - imap/smtp : connect, open INBOX, one search
    *  - caldav    : one PROPFIND (listCalendars)
-   *  - carddav    : listContacts({limit:1}) — still enumerates address books and
-   *                 vCards; needs a provider-level probe to get cheaper.
+   *  - carddav    : probe() — discovers address books without fetching vCards.
    */
   private async checkAccountConnection(account: any): Promise<string> {
     const credentials = account.credentials || {};
@@ -260,7 +259,7 @@ export class ManagementApi {
       case 'carddav': {
         const { CardDAVProvider } = await import('@mcp-ecc/provider-carddav');
         const provider = new CardDAVProvider(account.id, credentials);
-        await provider.listContacts({ limit: 1 });
+        await provider.probe();
         return 'CardDAV connection succeeded.';
       }
       default:
