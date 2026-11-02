@@ -61,7 +61,13 @@ export class McpEccServer {
 
     const account = await this.getAccountOwned(accountId);
     const credentials: any = { ...(account.credentials || {}) };
-    credentials.config = { ...(credentials.config || {}), email: account.email };
+    credentials.config = {
+      ...(credentials.config || {}),
+      email: account.email,
+      // Sender identity for outbound mail. The internal account id is a UUID for
+      // web-created accounts and must never be used as a From address.
+      ...(account.displayName ? { displayName: account.displayName } : {}),
+    };
     if (credentials.oauthClientId) {
       const oauthClient = await this.storage.getOAuthClient(credentials.oauthClientId);
       if (oauthClient) {
