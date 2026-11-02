@@ -140,16 +140,23 @@ export class GoogleProvider implements IMailProvider, ICalendarProvider, IContac
     type: MailFolder['type'],
     label?: { messagesUnread?: number | null; messagesTotal?: number | null } | null
   ): MailFolder {
-    if (!label) {
-      // The label is missing from labels.list, so there is no count to report. Saying 0 here
-      // would claim the folder is empty.
+    // Gmail does not always include the counts: a label can come back with those fields
+    // absent. Reporting 0 for that would claim the folder is empty — the same false
+    // statement this method already refuses to make when the label is missing entirely.
+    // Both cases are "unknown", so both report UNKNOWN_COUNT and say why.
+    const unread = label && typeof label.messagesUnread === 'number' ? label.messagesUnread : null;
+    const total = label && typeof label.messagesTotal === 'number' ? label.messagesTotal : null;
+
+    if (unread === null || total === null) {
       return {
         id,
         name,
         type,
-        unreadCount: UNKNOWN_COUNT,
-        totalCount: UNKNOWN_COUNT,
-        unreadCountError: 'label missing from Gmail labels.list response',
+        unreadCount: unread === null ? UNKNOWN_COUNT : unread,
+        totalCount: total === null ? UNKNOWN_COUNT : total,
+        unreadCountError: label
+          ? 'Gmail labels.list returned no message counts for this label'
+          : 'label missing from Gmail labels.list response',
         createdAt: 0,
         updatedAt: 0,
       };
@@ -159,8 +166,8 @@ export class GoogleProvider implements IMailProvider, ICalendarProvider, IContac
       id,
       name,
       type,
-      unreadCount: typeof label.messagesUnread === 'number' ? label.messagesUnread : 0,
-      totalCount: typeof label.messagesTotal === 'number' ? label.messagesTotal : 0,
+      unreadCount: unread,
+      totalCount: total,
       createdAt: 0,
       updatedAt: 0,
     };
@@ -185,7 +192,12 @@ export class GoogleProvider implements IMailProvider, ICalendarProvider, IContac
       pageToken: options.cursor,
     });
 
-    if (!res.data.messages) return { items: [], nextCursor: undefined, total: res.data.resultSizeEstimate || undefined };
+    // `resultSizeEstimate` is deliberately NOT reported as `total`. Gmail documents it as
+    // an estimate, and it returns the same round number for mailboxes of very different
+    // sizes — two unrelated accounts both reported 201 while one INBOX held a single
+    // message — so presenting it as a count is simply wrong. Exact counts come from
+    // listFolders, which reads the per-label figures from labels.list.
+    if (!res.data.messages) return { items: [], nextCursor: undefined };
 
     const messages: EmailMessage[] = [];
     for (const msg of res.data.messages) {
@@ -199,7 +211,7 @@ export class GoogleProvider implements IMailProvider, ICalendarProvider, IContac
       }
     }
 
-    return { items: messages, nextCursor: res.data.nextPageToken || undefined, total: res.data.resultSizeEstimate || undefined };
+    return { items: messages, nextCursor: res.data.nextPageToken || undefined };
   }
 
   async getMessage(messageId: string): Promise<EmailMessage> {
