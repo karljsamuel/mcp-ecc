@@ -25,6 +25,8 @@ export interface Account {
   lastSyncAt?: string | null;
   createdAt?: string;
   updatedAt?: string;
+  /** Non-secret IMAP/SMTP settings. Never contains the app password. */
+  mailConfig?: MailConfig;
 }
 
 export interface OAuthClient {
@@ -53,11 +55,43 @@ export interface OAuthClientInput {
   clientType?: 'public' | 'confidential';
 }
 
-export interface AccountCreateInput {
+/** Non-secret IMAP/SMTP settings as returned by the API. */
+export interface MailConfig {
+  username?: string;
+  imapHost?: string;
+  imapPort?: number;
+  imapTls?: boolean;
+  smtpHost?: string;
+  smtpPort?: number;
+  smtpSecure?: boolean;
+}
+
+/**
+ * Mail settings sent to the API. `appPassword` is never returned by the server, so on
+ * an update a blank value means "keep the stored password".
+ */
+export interface MailSettingsInput {
+  username?: string;
+  appPassword?: string;
+  imapHost?: string;
+  imapPort?: number;
+  imapTls?: boolean;
+  smtpHost?: string;
+  smtpPort?: number;
+  smtpSecure?: boolean;
+  /** CalDAV/CardDAV endpoint. Required for those providers. */
+  caldavUrl?: string;
+  carddavUrl?: string;
+  /** Free-form provider config, merged into the stored config server-side. */
+  config?: Record<string, unknown>;
+}
+
+export interface AccountCreateInput extends MailSettingsInput {
   name: string;
   provider: ProviderName;
   slug: string;
   email: string;
+  displayName?: string;
   config?: Record<string, unknown>;
   oauthClientId?: string;
   client?: {

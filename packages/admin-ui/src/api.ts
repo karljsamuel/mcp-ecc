@@ -4,6 +4,7 @@ import type {
   AccountStatus,
   ClientPlatform,
   Health,
+  MailSettingsInput,
   OAuthClient,
   ProviderName,
   Role,
@@ -216,7 +217,7 @@ export const accountsApi = {
   remove: (id: string) => send<{ success: boolean }>(`/api/accounts/${id}`, 'DELETE'),
   update: (
     id: string,
-    patch: Partial<Pick<Account, 'name' | 'slug' | 'displayName' | 'status' | 'health'>>,
+    patch: Partial<Pick<Account, 'name' | 'slug' | 'displayName' | 'status' | 'health'>> & MailSettingsInput,
   ) => send<{ account: Account }>(`/api/accounts/${id}`, 'PATCH', patch),
   reauth: (id: string, oauthClientId?: string) =>
     send<ReauthResult>(`/api/accounts/${id}/reauth`, 'POST', oauthClientId ? { oauthClientId } : {}),

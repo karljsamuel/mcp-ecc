@@ -82,6 +82,10 @@ export interface ManagementApiConfig {
 
 const SESSION_COOKIE = 'mcp_ecc_session';
 const AUTH_PROVIDERS: ProviderName[] = ['google', 'microsoft', 'zoho'];
+/** Providers that authenticate with a stored app password instead of an OAuth flow. */
+const PASSWORD_PROVIDERS: string[] = ['imap', 'smtp', 'caldav', 'carddav'];
+/** Providers whose settings are a set of IMAP/SMTP hosts and ports. */
+const MAIL_SETTING_PROVIDERS: string[] = ['imap', 'smtp'];
 
 // Strip secret fields before returning an entity to clients.
 function publicUser(u: User, includeApiKey = false) {
@@ -91,6 +95,58 @@ function publicUser(u: User, includeApiKey = false) {
 }
 function publicClient(c: OAuthClient) {
   return { id: c.id, provider: c.provider, label: c.label, clientId: c.clientId, scopes: c.scopes, tenantId: c.tenantId, accountsServer: c.accountsServer, clientPlatform: c.clientPlatform, clientType: c.clientType, enabled: c.enabled };
+}
+
+/**
+ * Non-secret provider settings for an account, as returned to clients.
+ *
+ * Explicitly allowlisted rather than spreading the stored config, because the app
+ * password shares the credentials object with it. Returned by both the list and the
+ * detail route: the account form is populated from whichever the client has, so a
+ * missing field here would show defaults and overwrite the real settings on save.
+ */
+function publicMailConfig(account: any) {
+  if (!MAIL_SETTING_PROVIDERS.includes(account.provider)) return undefined;
+  const config = account.credentials?.config || {};
+  return {
+    username: config.username,
+    imapHost: config.imapHost,
+    imapPort: config.imapPort,
+    imapTls: config.imapTls,
+    smtpHost: config.smtpHost,
+    smtpPort: config.smtpPort,
+    smtpSecure: config.smtpSecure,
+  };
+}
+
+/**
+ * Drop keys whose value is undefined.
+ *
+ * Absent fields arrive as undefined and must not take part in a merge: spreading them
+ * over the stored settings would erase the real values and let the defaults in
+ * buildMailConfig take over, silently pointing the account at imap.gmail.com.
+ */
+function defined(input: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined));
+}
+
+/** Settings accepted as flat form fields, in addition to a nested `config` object. */
+const MAIL_SETTING_FIELDS = [
+  'username',
+  'imapHost',
+  'imapPort',
+  'imapTls',
+  'smtpHost',
+  'smtpPort',
+  'smtpSecure',
+  'caldavUrl',
+  'carddavUrl',
+] as const;
+
+function pickMailSettings(body: any): Record<string, unknown> {
+  const picked: Record<string, unknown> = {};
+  for (const field of MAIL_SETTING_FIELDS) picked[field] = body?.[field];
+  return defined(picked);
 }
 
 export class ManagementApi {
@@ -251,7 +307,18 @@ export class ManagementApi {
       case 'imap':
       case 'smtp': {
         const { ImapSmtpProvider } = await import('@mcp-ecc/provider-imap-smtp');
-        const provider = new ImapSmtpProvider(account.id, credentials);
+        // Same identity injection the MCP path performs. Without the account email the
+        // provider resolves the mailbox login to the account id, which is a random UUID
+        // for accounts created in the web UI, so the test fails even when the host,
+        // port and app password are all correct.
+        const provider = new ImapSmtpProvider(account.id, {
+          ...credentials,
+          config: {
+            ...(credentials.config || {}),
+            email: account.email,
+            ...(account.displayName ? { displayName: account.displayName } : {}),
+          },
+        });
         await provider.listMessages('INBOX', { limit: 1 });
         return 'IMAP connection succeeded.';
       }
@@ -270,6 +337,48 @@ export class ManagementApi {
       default:
         throw new Error(`Unsupported provider: ${account.provider}`);
     }
+  }
+
+  /**
+   * Merge and validate the settings an IMAP/SMTP account needs.
+   *
+   * `incoming` wins over `base`, so a partial update only changes what it names. The
+   * app password is deliberately not part of config — it is stored separately and is
+   * never returned to clients. Throws with a user-facing message on invalid input.
+   */
+  private buildMailConfig(
+    provider: string,
+    incoming: Record<string, any>,
+    email: string,
+    base: Record<string, any> = {},
+  ): Record<string, any> {
+    const merged: Record<string, any> = { ...base, ...incoming };
+    if (!MAIL_SETTING_PROVIDERS.includes(provider)) return merged;
+
+    const asString = (value: unknown): string => (typeof value === 'string' ? value.trim() : '');
+    const asPort = (value: unknown, fallback: number, label: string): number => {
+      if (value === undefined || value === null || value === '') return fallback;
+      const port = Number(value);
+      if (!Number.isInteger(port) || port < 1 || port > 65535) {
+        throw new Error(`${label} must be a whole number between 1 and 65535`);
+      }
+      return port;
+    };
+
+    const out: Record<string, any> = {
+      ...merged,
+      email,
+      imapHost: asString(merged.imapHost) || 'imap.gmail.com',
+      imapPort: asPort(merged.imapPort, 993, 'IMAP port'),
+      imapTls: merged.imapTls !== false,
+      smtpHost: asString(merged.smtpHost) || 'smtp.gmail.com',
+      smtpPort: asPort(merged.smtpPort, 465, 'SMTP port'),
+      smtpSecure: merged.smtpSecure !== false,
+    };
+    // Only stored when explicitly supplied; otherwise the mailbox address is the login.
+    if (asString(merged.username)) out.username = asString(merged.username);
+    else delete out.username;
+    return out;
   }
 
   private setupRoutes(): void {
@@ -521,6 +630,7 @@ export class ManagementApi {
         id: a.id, provider: a.provider, name: a.name, slug: a.slug, email: a.email,
         displayName: a.displayName, status: a.status, health: a.health,
         lastSyncAt: a.lastSyncAt, authenticated: !!(a.credentials?.accessToken || a.credentials?.appPassword),
+        mailConfig: publicMailConfig(a),
       })) };
     });
 
@@ -532,14 +642,32 @@ export class ManagementApi {
         displayName: account.displayName, status: account.status, health: account.health, lastSyncAt: account.lastSyncAt,
         authenticated: !!(account.credentials?.accessToken || account.credentials?.appPassword),
         oauthClientId: account.credentials?.oauthClientId,
+        mailConfig: publicMailConfig(account),
       } };
     });
 
     this.app.post('/api/accounts', async (request: any, reply: any) => {
-      const { name, provider, slug, email, config, oauthClientId, client } = request.body;
+      const { name, provider, slug, email, displayName, appPassword, config, oauthClientId, client } = request.body;
       if (!name || !provider || !email) return reply.code(400).send({ error: 'name, provider, email required' });
+
+      // Password-backed providers need their secret up front; OAuth providers obtain
+      // tokens through the flow started further down.
+      if (PASSWORD_PROVIDERS.includes(provider) && !appPassword) {
+        return reply.code(400).send({ error: `appPassword is required for ${provider} accounts` });
+      }
+
+      let mailConfig: Record<string, any>;
+      try {
+        // Settings may arrive nested in `config` or as the flat fields the web form
+        // posts; both are merged into the stored config.
+        mailConfig = this.buildMailConfig(provider, { ...(config || {}), ...pickMailSettings(request.body) }, String(email).trim());
+      } catch (error: any) {
+        return reply.code(400).send({ error: error?.message || 'Invalid mail settings' });
+      }
+
       const id = randomUUID();
-      const credentials: any = { config };
+      const credentials: any = { config: mailConfig };
+      if (appPassword) credentials.appPassword = appPassword;
       const ownerId = request.user.id;
 
       // If inline client credentials were provided for an OAuth provider,
@@ -561,7 +689,7 @@ export class ManagementApi {
 
       const account = {
         id, ownerId, provider, name, slug: slug || generateSlug(name, id),
-        email, displayName: undefined, credentials,
+        email, displayName: typeof displayName === 'string' && displayName.trim() ? displayName.trim() : undefined, credentials,
         status: 'active' as const, health: 'unknown' as const, lastSyncAt: undefined,
         createdAt: Date.now(), updatedAt: Date.now(),
       };
@@ -627,6 +755,37 @@ export class ManagementApi {
       const allowed = ['name', 'slug', 'displayName', 'status', 'health', 'email'];
       const updates: any = {};
       for (const k of allowed) if (request.body[k] !== undefined) updates[k] = request.body[k];
+
+      // Provider settings and the app password. A blank or absent password means "keep
+      // the stored one" — the secret is never sent back to the UI, so the field starts
+      // empty on every load and must not be read as a request to clear it.
+      const { appPassword, config } = request.body ?? {};
+      const supplied = pickMailSettings(request.body);
+      const hasSettings = config !== undefined || Object.keys(supplied).length > 0;
+
+      if (hasSettings || appPassword) {
+        if (!PASSWORD_PROVIDERS.includes(account.provider)) {
+          return reply
+            .code(400)
+            .send({ error: `Mail settings are only supported for ${PASSWORD_PROVIDERS.join(', ')} accounts` });
+        }
+        try {
+          const email = String(updates.email ?? account.email ?? '').trim();
+          const nextConfig = this.buildMailConfig(
+            account.provider,
+            { ...(config || {}), ...supplied },
+            email,
+            account.credentials?.config || {},
+          );
+          const credentialUpdates: any = { config: nextConfig };
+          // Only replace the secret when a non-empty one was supplied.
+          if (typeof appPassword === 'string' && appPassword.length > 0) credentialUpdates.appPassword = appPassword;
+          await this.storage.updateCredentials(account.id, credentialUpdates);
+        } catch (error: any) {
+          return reply.code(400).send({ error: error?.message || 'Invalid mail settings' });
+        }
+      }
+
       await this.storage.updateAccount(account.id, updates);
       return { success: true };
     });

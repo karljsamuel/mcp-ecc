@@ -8,7 +8,7 @@ import {
   STATUS_LABELS,
   type ServerInfo,
 } from '../api';
-import type { Account, AccountCreateInput, AccountStatus, OAuthClient, ProviderName } from '../types';
+import type { Account, AccountCreateInput, AccountStatus, MailSettingsInput, OAuthClient, ProviderName } from '../types';
 import {
   Alert,
   HealthBadge,
@@ -20,6 +20,155 @@ import type { ToastPush } from './toast';
 
 const PROVIDERS: ProviderName[] = ['google', 'microsoft', 'zoho', 'imap', 'caldav', 'carddav'];
 const isOAuthProvider = (p: ProviderName) => ['google', 'microsoft', 'zoho'].includes(p);
+/** Providers that authenticate with an app password rather than an OAuth flow. */
+const isPasswordProvider = (p: ProviderName) => ['imap', 'smtp', 'caldav', 'carddav'].includes(p);
+/** Providers whose settings are IMAP/SMTP hosts and ports. */
+const isMailProvider = (p: ProviderName) => ['imap', 'smtp'].includes(p);
+
+const DEFAULT_IMAP_PORT = 993;
+const DEFAULT_SMTP_PORT = 465;
+
+type MailSettings = MailSettingsInput;
+
+/**
+ * Mail server settings for an account.
+ *
+ * The API never returns the app password, so on an existing account this field starts
+ * empty and a blank value means "keep the stored password" — the placeholder says so
+ * explicitly, so an empty box is not read as a request to clear the secret.
+ */
+function MailSettingsFields({
+  provider,
+  value,
+  onChange,
+  passwordRequired,
+}: {
+  provider: ProviderName;
+  value: MailSettings;
+  onChange: (next: MailSettings) => void;
+  passwordRequired: boolean;
+}) {
+  const set = (patch: Partial<MailSettings>) => onChange({ ...value, ...patch });
+  const asPort = (raw: string, fallback: number) => {
+    if (raw.trim() === '') return fallback;
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? parsed : fallback;
+  };
+
+  return (
+    <div className="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-4">
+      <div className="text-sm font-semibold text-slate-700">Mail server</div>
+
+      <div>
+        <label className="label">App password</label>
+        <input
+          className="input"
+          type="password"
+          autoComplete="new-password"
+          value={value.appPassword ?? ''}
+          onChange={(e) => set({ appPassword: e.target.value })}
+          placeholder={passwordRequired ? 'App password' : 'Leave blank to keep the stored password'}
+          required={passwordRequired}
+        />
+        <p className="mt-1 text-xs text-slate-500">
+          Stored encrypted and never sent back to this page.
+        </p>
+      </div>
+
+      {isMailProvider(provider) ? (
+        <>
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            <div>
+              <label className="label">IMAP host</label>
+              <input
+                className="input"
+                value={value.imapHost ?? ''}
+                onChange={(e) => set({ imapHost: e.target.value })}
+                placeholder="imap.gmail.com"
+              />
+            </div>
+            <div>
+              <label className="label">IMAP port</label>
+              <input
+                className="input"
+                type="number"
+                min={1}
+                max={65535}
+                value={value.imapPort ?? DEFAULT_IMAP_PORT}
+                onChange={(e) => set({ imapPort: asPort(e.target.value, DEFAULT_IMAP_PORT) })}
+              />
+            </div>
+            <div>
+              <label className="label">SMTP host</label>
+              <input
+                className="input"
+                value={value.smtpHost ?? ''}
+                onChange={(e) => set({ smtpHost: e.target.value })}
+                placeholder="smtp.gmail.com"
+              />
+            </div>
+            <div>
+              <label className="label">SMTP port</label>
+              <input
+                className="input"
+                type="number"
+                min={1}
+                max={65535}
+                value={value.smtpPort ?? DEFAULT_SMTP_PORT}
+                onChange={(e) => set({ smtpPort: asPort(e.target.value, DEFAULT_SMTP_PORT) })}
+              />
+            </div>
+          </div>
+
+          <label className="flex items-center gap-2 text-sm text-slate-700">
+            <input
+              type="checkbox"
+              className="accent-indigo-600"
+              checked={value.imapTls !== false}
+              onChange={(e) => set({ imapTls: e.target.checked })}
+            />
+            Use TLS for IMAP
+          </label>
+          <label className="flex items-center gap-2 text-sm text-slate-700">
+            <input
+              type="checkbox"
+              className="accent-indigo-600"
+              checked={value.smtpSecure !== false}
+              onChange={(e) => set({ smtpSecure: e.target.checked })}
+            />
+            Use TLS for SMTP
+          </label>
+
+          <div>
+            <label className="label">Username</label>
+            <input
+              className="input"
+              value={value.username ?? ''}
+              onChange={(e) => set({ username: e.target.value })}
+              placeholder="Defaults to the account email"
+            />
+            <p className="mt-1 text-xs text-slate-500">
+              Leave blank unless your mail provider gives you a separate login name.
+            </p>
+          </div>
+        </>
+      ) : (
+        <div>
+          <label className="label">{provider === 'carddav' ? 'CardDAV URL' : 'CalDAV URL'}</label>
+          <input
+            className="input"
+            value={(provider === 'carddav' ? value.carddavUrl : value.caldavUrl) ?? ''}
+            onChange={(e) =>
+              set(provider === 'carddav' ? { carddavUrl: e.target.value } : { caldavUrl: e.target.value })
+            }
+            placeholder="https://example.com/.well-known/dav"
+            required
+          />
+        </div>
+      )}
+    </div>
+  );
+}
 
 function KeyIcon({ authenticated }: { authenticated: boolean }) {
   return (
@@ -210,6 +359,7 @@ function CreateAccountModal({
   const [name, setName] = useState('');
   const [slug, setSlug] = useState('');
   const [email, setEmail] = useState('');
+  const [mail, setMail] = useState<MailSettings>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -255,6 +405,27 @@ function CreateAccountModal({
             tenantId: tenantId.trim() || undefined,
             accountsServer: accountsServer.trim() || undefined,
           };
+        }
+      } else if (isPasswordProvider(provider)) {
+        // Without a secret these providers can never authenticate, so the server
+        // rejects the request outright — fail here first with a clearer message.
+        const appPassword = mail.appPassword?.trim();
+        if (!appPassword) throw new Error('An app password is required for this provider');
+        payload.appPassword = appPassword;
+
+        if (isMailProvider(provider)) {
+          payload.imapHost = mail.imapHost?.trim() || undefined;
+          payload.imapPort = mail.imapPort ?? DEFAULT_IMAP_PORT;
+          payload.imapTls = mail.imapTls !== false;
+          payload.smtpHost = mail.smtpHost?.trim() || undefined;
+          payload.smtpPort = mail.smtpPort ?? DEFAULT_SMTP_PORT;
+          payload.smtpSecure = mail.smtpSecure !== false;
+          payload.username = mail.username?.trim() || undefined;
+        } else {
+          const key = provider === 'carddav' ? 'carddavUrl' : 'caldavUrl';
+          const url = (provider === 'carddav' ? mail.carddavUrl : mail.caldavUrl)?.trim();
+          if (!url) throw new Error(`${provider === 'carddav' ? 'CardDAV' : 'CalDAV'} URL is required`);
+          payload.config = { [key]: url };
         }
       }
       const result = await accountsApi.create(payload);
@@ -390,6 +561,10 @@ function CreateAccountModal({
           </div>
         )}
 
+        {isPasswordProvider(provider) && (
+          <MailSettingsFields provider={provider} value={mail} onChange={setMail} passwordRequired />
+        )}
+
         <div className="flex justify-end gap-3 pt-2">
           <button type="button" onClick={onClose} className="btn-secondary">Cancel</button>
           <button type="submit" disabled={busy} className="btn-primary">
@@ -422,6 +597,9 @@ function AccountDetailModal({
   const [slug, setSlug] = useState(account.slug);
   const [displayName, setDisplayName] = useState(account.displayName ?? '');
   const [status, setStatus] = useState<AccountStatus>(account.status ?? 'active');
+  // Seeded from the account's non-secret settings. The app password is deliberately
+  // absent — the server never returns it — so the field starts empty on every open.
+  const [mail, setMail] = useState<MailSettings>({ ...(account.mailConfig ?? {}) });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -435,12 +613,35 @@ function AccountDetailModal({
     setBusy(true);
     setError(null);
     try {
-      await accountsApi.update(account.id, {
+      const patch: Parameters<typeof accountsApi.update>[1] = {
         name: name.trim() ? name : undefined,
         slug,
         status,
         ...(displayName !== account.displayName ? { displayName } : {}),
-      });
+      };
+
+      if (isPasswordProvider(account.provider)) {
+        // Blank means "keep the stored password", so only send a non-empty one.
+        const appPassword = mail.appPassword?.trim();
+        if (appPassword) patch.appPassword = appPassword;
+
+        if (isMailProvider(account.provider)) {
+          patch.username = mail.username?.trim() ?? '';
+          patch.imapHost = mail.imapHost?.trim() || undefined;
+          patch.imapPort = mail.imapPort ?? DEFAULT_IMAP_PORT;
+          patch.imapTls = mail.imapTls !== false;
+          patch.smtpHost = mail.smtpHost?.trim() || undefined;
+          patch.smtpPort = mail.smtpPort ?? DEFAULT_SMTP_PORT;
+          patch.smtpSecure = mail.smtpSecure !== false;
+        } else {
+          const url = (account.provider === 'carddav' ? mail.carddavUrl : mail.caldavUrl)?.trim();
+          if (url) {
+            patch.config = { [account.provider === 'carddav' ? 'carddavUrl' : 'caldavUrl']: url };
+          }
+        }
+      }
+
+      await accountsApi.update(account.id, patch);
       push('Account updated', 'success');
       onUpdated();
     } catch (err) {
@@ -562,6 +763,12 @@ function AccountDetailModal({
             {reauthFlow.verificationUri && <div className="mt-2"><a className="font-medium underline" href={reauthFlow.verificationUri} target="_blank" rel="noreferrer">Open authorisation page</a></div>}
             {reauthFlow.userCode && <div className="mt-2 font-mono font-bold">Code: {reauthFlow.userCode}</div>}
           </Alert>
+        </div>
+      )}
+
+      {isPasswordProvider(account.provider) && (
+        <div className="mb-5">
+          <MailSettingsFields provider={account.provider} value={mail} onChange={setMail} passwordRequired={false} />
         </div>
       )}
 
