@@ -423,8 +423,26 @@ export interface OAuthStateData {
   tenantId?: string;
   accountsServer?: string;
   accountId?: string;
+  /** Scopes resolved when the flow started, reused when it is completed later. */
+  scopes?: string[];
+  /**
+   * Device-authorisation code and its polling interval.
+   *
+   * The CLI polls in-process and never needs these persisted. A caller that has to
+   * return between attempts — the web UI — must be able to complete the flow on a
+   * later request, so the code has to outlive the request that created it.
+   */
+  deviceCode?: string;
+  interval?: number;
   createdAt: number;
 }
+
+/** Outcome of a single device-authorisation poll. */
+export type DevicePollResult =
+  | { status: 'complete'; tokens: OAuthTokens }
+  | { status: 'pending' }
+  | { status: 'expired'; message: string }
+  | { status: 'error'; message: string };
 
 // Errors
 export class McpEccError extends Error {
@@ -443,6 +461,22 @@ export class AuthError extends McpEccError {
   constructor(message: string, details?: unknown) {
     super(message, 'AUTH_ERROR', 401, details);
     this.name = 'AuthError';
+  }
+}
+
+/**
+ * Microsoft declined a device-authorisation request because the app registration is not
+ * enabled for public client flows.
+ *
+ * This is a configuration fact rather than a failure, and it is the only condition that
+ * justifies falling back to the browser authorisation-code flow. Every other error must
+ * surface: a transient outage or a bad scope that silently switched flows would hide a
+ * real problem behind what looks like a deliberate choice.
+ */
+export class DeviceFlowUnsupportedError extends AuthError {
+  constructor(message: string, details?: unknown) {
+    super(message, details);
+    this.name = 'DeviceFlowUnsupportedError';
   }
 }
 
