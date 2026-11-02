@@ -25,6 +25,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Gmail folder counts reported `0` for folders that were not empty.** `labels.list` does not
+  always include `messagesTotal`/`messagesUnread`, and a label that came back without them was
+  coerced to `0` — claiming the folder was empty. In a live deployment both Gmail accounts
+  reported `unreadCount: 0, totalCount: 0` for every folder while their inboxes held unread
+  mail, including the very message the same tool returned. Absent counts now report `-1` with
+  `unreadCountError`, which is what the tool documentation already specified; a genuine zero is
+  still reported as `0`.
+- **`mail.listMessages` reported Gmail's `resultSizeEstimate` as `total`.** That field is an
+  estimate and returns the same round number for mailboxes of very different sizes — two
+  unrelated accounts both reported `201`, and one of those inboxes held a single message.
+  Google no longer reports `total`; exact counts come from `mail.listFolders`.
 - **The web UI could not complete a device-authorisation flow at all.** No poll endpoint
   existed, and `startFlow` did not retain the device code, so a device flow started from the
   browser displayed a code nothing ever exchanged — it could only ever hang. The device code

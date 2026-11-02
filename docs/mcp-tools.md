@@ -55,12 +55,16 @@ Per provider:
 | Zoho | pages through the folder's messages, counting `status === "0"` | ≤ 10 pages (2000 messages) per folder, 4 folders in parallel, 20s budget |
 | IMAP/SMTP | `LIST` with `statusQuery {unseen, messages}` (LIST-STATUS / IMAP4rev2) | 1 round-trip; on servers without LIST-STATUS, one `STATUS` per folder through a 5-way pool under a 20s budget |
 
+Google note: `labels.list` does not always include `messagesTotal`/`messagesUnread`. When a label comes back without them the folder reports `-1` and sets `unreadCountError` — it does **not** report `0`, which would claim the folder is empty.
+
 IMAP note: the connection is reused across calls (no connect/logout per call), timeouts are explicit (20s connect, 10s greeting, 60s socket), and the folder list is cached for 30s.
 
 ### `mail.listMessages`
 *Input:* `{ "accountId": "...", "folderId": "INBOX", "limit": 20, "cursor": "optional", "query": "optional" }`
 *Output:* `{ "items": [message envelopes], "nextCursor": "optional", "total": "optional" }`.
 Pass `nextCursor` into the next request's `cursor` to retrieve subsequent pages.
+
+`total` is only present when the provider can state a real count. It is **absent for Google**: Gmail's `resultSizeEstimate` is an estimate that returns the same round number for mailboxes of very different sizes, so it is not reported as a count. Use `mail.listFolders` for exact Google totals.
 
 ### `mail.getMessage`
 *Input:* `{ "accountId": "...", "messageId": "..." }`
