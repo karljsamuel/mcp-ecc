@@ -25,13 +25,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Gmail folder counts reported `0` for folders that were not empty.** `labels.list` does not
-  always include `messagesTotal`/`messagesUnread`, and a label that came back without them was
-  coerced to `0` — claiming the folder was empty. In a live deployment both Gmail accounts
-  reported `unreadCount: 0, totalCount: 0` for every folder while their inboxes held unread
-  mail, including the very message the same tool returned. Absent counts now report `-1` with
-  `unreadCountError`, which is what the tool documentation already specified; a genuine zero is
-  still reported as `0`.
+- **`mail_listFolders` reported `0` for every Gmail folder.** The Gmail API reference is
+  explicit that a label from `users.labels.list` contains only `id`, `name`,
+  `messageListVisibility`, `labelListVisibility` and `type` — counts are not included and
+  require `users.labels.get` per label. The provider assumed they came back for free, so
+  the counts were always absent and were then coerced to `0`, claiming every folder was
+  empty while the inboxes held unread mail. Counts are now fetched per folder (five in
+  flight) when `withUnreadCounts` is true; the cheap path reports `-1`, and a failed or
+  count-less lookup reports `-1` with `unreadCountError`. A genuine zero is still `0`.
 - **`mail.listMessages` reported Gmail's `resultSizeEstimate` as `total`.** That field is an
   estimate and returns the same round number for mailboxes of very different sizes — two
   unrelated accounts both reported `201`, and one of those inboxes held a single message.
