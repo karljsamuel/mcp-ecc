@@ -34,6 +34,7 @@ import {
   validateSetupStep,
   verifySetupDatabase,
   type DBConnectionProbe,
+  type OAuthConfig,
   type OAuthFlowType,
   type ResolvedSetupConfig,
   type SetupAnswers,
@@ -99,16 +100,20 @@ function publicClient(c: OAuthClient) {
   return { id: c.id, provider: c.provider, label: c.label, clientId: c.clientId, scopes: c.scopes, tenantId: c.tenantId, accountsServer: c.accountsServer, clientPlatform: c.clientPlatform, clientType: c.clientType, enabled: c.enabled };
 }
 
+/** Providers that store settings worth echoing back to the account form. */
+const SETTING_PROVIDERS: string[] = ['imap', 'smtp', 'caldav', 'carddav'];
+
 /**
  * Non-secret provider settings for an account, as returned to clients.
  *
  * Explicitly allowlisted rather than spreading the stored config, because the app
  * password shares the credentials object with it. Returned by both the list and the
  * detail route: the account form is populated from whichever the client has, so a
- * missing field here would show defaults and overwrite the real settings on save.
+ * missing field here would show defaults — or, for the DAV URLs, an empty box that
+ * hides the account's real endpoint.
  */
 function publicMailConfig(account: any) {
-  if (!MAIL_SETTING_PROVIDERS.includes(account.provider)) return undefined;
+  if (!SETTING_PROVIDERS.includes(account.provider)) return undefined;
   const config = account.credentials?.config || {};
   return {
     username: config.username,
@@ -118,6 +123,8 @@ function publicMailConfig(account: any) {
     smtpHost: config.smtpHost,
     smtpPort: config.smtpPort,
     smtpSecure: config.smtpSecure,
+    caldavUrl: config.caldavUrl,
+    carddavUrl: config.carddavUrl,
   };
 }
 
@@ -395,9 +402,9 @@ export class ManagementApi {
   private async startOAuthFlow(
     provider: ProviderName,
     preferred: OAuthFlowType,
-    config: any,
+    config: OAuthConfig,
     accountId: string,
-  ): Promise<{ flow: any; flowType: OAuthFlowType }> {
+  ): Promise<{ flow: Awaited<ReturnType<OAuthManager['startFlow']>>; flowType: OAuthFlowType }> {
     if (provider === 'microsoft' && preferred === 'device_code') {
       try {
         const flow = await this.oauthManager.startFlow(provider, 'device_code', config, accountId);
@@ -1003,9 +1010,15 @@ export class ManagementApi {
         };
       }
 
-      return result.status === 'pending'
-        ? { status: 'pending' }
-        : { status: result.status, message: result.message };
+      if (result.status === 'pending') return { status: 'pending' };
+
+      // `retryable` is passed through so the browser keeps polling through a transport
+      // blip rather than abandoning a flow the user has already approved.
+      return {
+        status: result.status,
+        message: result.message,
+        ...(result.status === 'error' && result.retryable ? { retryable: true } : {}),
+      };
     });
 
     // --- OAuth clients (per-user) ---

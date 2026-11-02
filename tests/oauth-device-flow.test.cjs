@@ -174,12 +174,14 @@ test('oauth: a single poll reports pending, complete and expired distinctly', as
   assert.equal(complete.tokens.accessToken, 'access-fixture');
   assert.equal(complete.tokens.refreshToken, 'refresh-fixture');
 
-  // A transport failure is retryable, so it must not look like a completed flow.
+  // A transport failure is retryable, so it must not look like a completed flow — nor like
+  // a terminal refusal, which would abandon an approval that may have already happened.
   stubFetch(t, () => {
     throw new Error('socket hang up');
   });
   const unreachable = await manager.pollDeviceCodeOnce('device-code-fixture', MICROSOFT_CLIENT);
   assert.equal(unreachable.status, 'error');
+  assert.equal(unreachable.retryable, true, 'a dropped request must be marked retryable');
   assert.match(unreachable.message, /socket hang up/);
 });
 

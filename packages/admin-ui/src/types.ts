@@ -64,6 +64,9 @@ export interface MailConfig {
   smtpHost?: string;
   smtpPort?: number;
   smtpSecure?: boolean;
+  /** CalDAV/CardDAV endpoint, returned so the edit form can show the stored URL. */
+  caldavUrl?: string;
+  carddavUrl?: string;
 }
 
 /**

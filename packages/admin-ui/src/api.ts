@@ -215,6 +215,8 @@ export interface ReauthResult {
 export interface DeviceAuthPollResult {
   status: 'pending' | 'complete' | 'expired' | 'error';
   message?: string;
+  /** An `error` worth retrying — a dropped request, not a refusal from the provider. */
+  retryable?: boolean;
   account?: { id: string; slug: string; name: string };
 }
 

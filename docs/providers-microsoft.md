@@ -109,7 +109,7 @@ Both are decided by attempting the device flow first, so no setting has to be co
 
 Works for personal and work accounts depending on the app registration and tenant.
 
-Re-authorise an account whose token has been revoked / expired via **Re-authenticate** (`POST /api/accounts/:id/reauth`), which follows the same automatic selection. A device flow started here, or during account creation, is completed by `POST /api/oauth/device/poll` — the token exchange happens server-side, so the browser only drives the polling cadence and never receives the device code.
+Re-authorise an account whose token has been revoked / expired via **Re-authenticate** (`POST /api/accounts/:id/reauth`), which follows the same automatic selection. A device flow started here, or during account creation, returns the device code to the client — deliberately, so a Microsoft client can drive authentication itself — and can also be completed by `POST /api/oauth/device/poll`, which performs the token exchange server-side while the browser only drives the polling cadence.
 
 ## 5. Data model mapping
 

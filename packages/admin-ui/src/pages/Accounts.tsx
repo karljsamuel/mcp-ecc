@@ -391,6 +391,16 @@ function CreateAccountModal({
     setSelectedClientId('');
   }, [provider]);
 
+  // A device flow belongs to one attempt, and this modal stays mounted between openings
+  // (only its `open` prop changes). Without this, a finished or abandoned flow would
+  // resurface as a dead code with no form behind it the next time Add account is clicked.
+  useEffect(() => {
+    if (open) {
+      setDeviceFlow(null);
+      setError(null);
+    }
+  }, [open]);
+
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -654,10 +664,13 @@ function DeviceAuthPanel({
   const [copied, setCopied] = useState(false);
 
   // Kept in refs so the polling effect does not restart when a parent re-renders.
+  // Synced in an effect rather than during render, which is the supported approach.
   const complete = useRef(onComplete);
   const failed = useRef(onFailed);
-  complete.current = onComplete;
-  failed.current = onFailed;
+  useEffect(() => {
+    complete.current = onComplete;
+    failed.current = onFailed;
+  });
 
   const intervalMs = Math.max(5, intervalSeconds ?? 5) * 1000;
 
@@ -682,6 +695,13 @@ function DeviceAuthPanel({
           return;
         }
         if (result.status === 'pending') {
+          timer = setTimeout(() => void poll(), intervalMs);
+          return;
+        }
+        if (result.status === 'error' && result.retryable) {
+          // A dropped request, not a refusal from the provider: the user may already have
+          // approved, so keep polling to the deadline instead of abandoning the flow.
+          setMessage(result.message ?? null);
           timer = setTimeout(() => void poll(), intervalMs);
           return;
         }
@@ -729,10 +749,15 @@ function DeviceAuthPanel({
             type="button"
             className="btn-secondary"
             onClick={() => {
-              void navigator.clipboard?.writeText(userCode).then(() => {
-                setCopied(true);
-                setTimeout(() => setCopied(false), 2000);
-              });
+              // Clipboard access can be refused (unfocused document, permissions). The code
+              // is on screen either way, so the rejection needs no louder handling.
+              void navigator.clipboard
+                ?.writeText(userCode)
+                .then(() => {
+                  setCopied(true);
+                  setTimeout(() => setCopied(false), 2000);
+                })
+                .catch(() => {});
             }}
           >
             {copied ? 'Copied' : 'Copy code'}

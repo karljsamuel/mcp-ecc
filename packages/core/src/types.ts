@@ -440,12 +440,19 @@ export interface OAuthStateData {
   createdAt: number;
 }
 
-/** Outcome of a single device-authorisation poll. */
+/**
+ * Outcome of a single device-authorisation poll.
+ *
+ * `retryable` marks an error that is worth another attempt — a transport failure that
+ * produced no HTTP response at all, rather than a refusal from the token endpoint. A
+ * caller that stops polling on any `error` would abandon a flow the user has already
+ * approved because one request was dropped.
+ */
 export type DevicePollResult =
   | { status: 'complete'; tokens: OAuthTokens }
   | { status: 'pending' }
   | { status: 'expired'; message: string }
-  | { status: 'error'; message: string };
+  | { status: 'error'; message: string; retryable?: boolean };
 
 // Errors
 export class McpEccError extends Error {

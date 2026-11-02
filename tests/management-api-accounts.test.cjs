@@ -222,3 +222,47 @@ test('accounts API: another user cannot read or edit the account', async (t) => 
   assert.equal((await storage.getAccount(id)).name, 'Work mailbox', 'the account is unchanged');
   assert.equal((await storage.getAccount(id)).credentials.appPassword, PASSWORD);
 });
+
+test('accounts API: the CalDAV endpoint is returned so the edit form can show it', async (t) => {
+  const { app, storage, cookie } = await boot(t);
+
+  const created = await app.inject(
+    authed(cookie, {
+      method: 'POST',
+      url: '/api/accounts',
+      payload: {
+        name: 'Team calendar',
+        provider: 'caldav',
+        slug: 'team-calendar',
+        email: 'owner@example.test',
+        appPassword: PASSWORD,
+        config: { caldavUrl: 'https://dav.example.test/remote.php/dav/' },
+      },
+    }),
+  );
+  assert.equal(created.statusCode, 201, created.body);
+  const id = created.json().account.id;
+
+  // Without this the form renders an empty URL box and hides the account's real endpoint.
+  const detail = await app.inject(authed(cookie, { method: 'GET', url: `/api/accounts/${id}` }));
+  assert.equal(detail.statusCode, 200, detail.body);
+  assert.equal(detail.json().account.mailConfig.caldavUrl, 'https://dav.example.test/remote.php/dav/');
+  assert.ok(!detail.body.includes(PASSWORD), 'the app password is still never returned');
+
+  const list = await app.inject(authed(cookie, { method: 'GET', url: '/api/accounts' }));
+  assert.equal(list.json().accounts[0].mailConfig.caldavUrl, 'https://dav.example.test/remote.php/dav/');
+
+  // And the value round-trips through an update.
+  const patched = await app.inject(
+    authed(cookie, {
+      method: 'PATCH',
+      url: `/api/accounts/${id}`,
+      payload: { caldavUrl: 'https://dav2.example.test/dav/' },
+    }),
+  );
+  assert.equal(patched.statusCode, 200, patched.body);
+  assert.equal(
+    (await storage.getAccount(id)).credentials.config.caldavUrl,
+    'https://dav2.example.test/dav/',
+  );
+});

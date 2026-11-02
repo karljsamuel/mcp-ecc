@@ -253,8 +253,10 @@ export class OAuthManager {
       });
       data = await response.json();
     } catch (error: any) {
-      // No HTTP response at all: the caller may retry, so this is not terminal.
-      return { status: 'error', message: error?.message || 'Device authorisation poll failed' };
+      // No HTTP response at all — DNS, timeout, connection reset. The authorisation may
+      // still be pending, so this is retryable: reporting it as terminal would make the
+      // caller abandon a flow the user has already approved.
+      return { status: 'error', message: error?.message || 'Device authorisation poll failed', retryable: true };
     }
 
     const errorCode = data?.error;

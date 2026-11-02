@@ -18,10 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unaffected (it rejects Gmail scopes for device flows) and Zoho still follows its client's
   platform.
 - `POST /api/oauth/device/poll` completes a device-authorisation flow: one poll per call,
-  answering `pending`, `complete`, `expired` or `error`. On `complete` it stores the tokens
-  and activates the account exactly as `/oauth/callback` does, so the two flows converge on
-  a single completion path. Only the owner of the pending account can complete it, and the
-  state is single-use.
+  answering `pending`, `complete`, `expired` or `error`. A transport failure is returned with
+  `retryable: true` so a dropped request does not abandon a flow the user has already
+  approved. On `complete` it stores the tokens and activates the account exactly as
+  `/oauth/callback` does, so the two flows converge on a single completion path. Only the
+  owner of the pending account can complete it, and the state is single-use.
 
 ### Fixed
 
