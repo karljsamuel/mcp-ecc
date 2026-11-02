@@ -48,10 +48,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Account creation and re-authentication responses now report `flowType`, `state` and
   `interval`, so a caller can tell which flow was started and drive it to completion.
 
-## [0.7.1] - 2026-11-02
-
-### Fixed
-
 - **The web UI could not configure an IMAP/SMTP account.** `POST /api/accounts`
   ignored the app password, so an account created there had no credential at all
   and could never authenticate; `PATCH` had no way to set or change one either.
