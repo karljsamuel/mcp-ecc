@@ -10,6 +10,7 @@ import { readFileSync, existsSync } from 'fs';
 import type { StorageAdapter, ProviderName, OAuthClient, User } from '@mcp-ecc/core';
 import {
   AuthService,
+  DeviceFlowUnsupportedError,
   OAuthManager,
   applySetup,
   checkConfig,
@@ -33,6 +34,7 @@ import {
   validateSetupStep,
   verifySetupDatabase,
   type DBConnectionProbe,
+  type OAuthFlowType,
   type ResolvedSetupConfig,
   type SetupAnswers,
   type SetupD1Config,
@@ -381,6 +383,41 @@ export class ManagementApi {
     return out;
   }
 
+  /**
+   * Start an OAuth flow, preferring the device flow for Microsoft whenever its app
+   * registration allows it — including from the browser UI.
+   *
+   * Whether a registration permits public client flows cannot be read from anywhere
+   * except the attempt itself, so the device flow is tried first and the browser flow
+   * is used only when Microsoft declines for that particular reason. Every other
+   * failure propagates: silently switching flows on a transient error would hide it.
+   */
+  private async startOAuthFlow(
+    provider: ProviderName,
+    preferred: OAuthFlowType,
+    config: any,
+    accountId: string,
+  ): Promise<{ flow: any; flowType: OAuthFlowType }> {
+    if (provider === 'microsoft' && preferred === 'device_code') {
+      try {
+        const flow = await this.oauthManager.startFlow(provider, 'device_code', config, accountId);
+        return { flow, flowType: 'device_code' };
+      } catch (error) {
+        if (!(error instanceof DeviceFlowUnsupportedError)) throw error;
+        this.app.log.info(
+          { provider, accountId },
+          'Microsoft app registration is not enabled for public client flows; using the browser flow',
+        );
+        // The registration cannot use device code at all, so retry with the browser flow
+        // rather than the preferred one — which is the device flow that just failed.
+        const flow = await this.oauthManager.startFlow(provider, 'authorization_code', config, accountId);
+        return { flow, flowType: 'authorization_code' };
+      }
+    }
+    const flow = await this.oauthManager.startFlow(provider, preferred, config, accountId);
+    return { flow, flowType: preferred };
+  }
+
   private setupRoutes(): void {
     // --- Health (public) ---
     // Stays 200 while unconfigured so an orchestrator does not restart-loop the
@@ -719,8 +756,23 @@ export class ManagementApi {
             }
           }
           const redirectUri = `${this.publicUrl}/oauth/callback`;
-          const flowType = provider === 'google' || provider === 'microsoft' || oauthClient.clientPlatform === 'web' ? 'authorization_code' : 'device_code';
-          const flow = await this.oauthManager.startFlow(provider as ProviderName, flowType, OAuthManager.clientToConfig(oauthClient, redirectUri), account.id);
+          // Google rejects Gmail scopes for the device flow. Microsoft prefers the
+          // device flow wherever its registration permits it, browser UI included, and
+          // falls back to the authorisation-code flow when it does not. Zoho follows
+          // the client's platform.
+          const preferredFlow: OAuthFlowType = provider === 'google'
+            ? 'authorization_code'
+            : provider === 'microsoft'
+              ? 'device_code'
+              : oauthClient.clientPlatform === 'web'
+                ? 'authorization_code'
+                : 'device_code';
+          const { flow, flowType } = await this.startOAuthFlow(
+            provider as ProviderName,
+            preferredFlow,
+            OAuthManager.clientToConfig(oauthClient, redirectUri),
+            account.id,
+          );
           await this.storage.updateCredentials(account.id, { oauthClientId: oauthClient.id });
           return reply.code(201).send({
             account: { id: account.id, slug: account.slug, name: account.name },
@@ -728,6 +780,9 @@ export class ManagementApi {
             verificationUri: flow.verificationUri,
             userCode: flow.userCode,
             deviceCode: flow.deviceCode,
+            state: flow.state,
+            flowType,
+            interval: flow.interval,
             message: flowType === 'device_code' ? `Account created. Go to ${flow.verificationUri} and enter code: ${flow.userCode}` : 'Account created. Open the authorisation URL to complete setup.',
           });
         }
@@ -832,15 +887,26 @@ export class ManagementApi {
         return reply.code(400).send({ error: `OAuth client '${client.label}' has no usable client secret. Edit or recreate this client with the secret.` });
       }
       const redirectUri = `${this.publicUrl}/oauth/callback`;
-      // Google cannot use device flow for Gmail/Calendar scopes. Web clients
-      // must use the browser authorisation-code flow; device-capable clients
-      // use device flow for Microsoft/Zoho.
-      const flowType = account.provider === 'google' || account.provider === 'microsoft' || client.clientPlatform === 'web' ? 'authorization_code' : 'device_code';
+      // Google cannot use device flow for Gmail/Calendar scopes. Microsoft prefers the
+      // device flow wherever its registration permits it, browser UI included, and falls
+      // back to the authorisation-code flow when it does not. Zoho follows the client.
+      const preferredFlow: OAuthFlowType = account.provider === 'google'
+        ? 'authorization_code'
+        : account.provider === 'microsoft'
+          ? 'device_code'
+          : client.clientPlatform === 'web'
+            ? 'authorization_code'
+            : 'device_code';
       try {
-        const flow = await this.oauthManager.startFlow(account.provider as ProviderName, flowType, OAuthManager.clientToConfig(client, redirectUri), account.id);
+        const { flow, flowType } = await this.startOAuthFlow(
+          account.provider as ProviderName,
+          preferredFlow,
+          OAuthManager.clientToConfig(client, redirectUri),
+          account.id,
+        );
         // Persist the chosen client on the account for later token refresh.
         await this.storage.updateCredentials(account.id, { oauthClientId: client.id });
-        return { authorizeUrl: flow.verificationUri, verificationUri: flow.verificationUri, userCode: flow.userCode, deviceCode: flow.deviceCode, interval: flow.interval, state: flow.state, message: flowType === 'device_code' ? `Go to ${flow.verificationUri} and enter code: ${flow.userCode}` : 'Open the authorisation URL to complete reauthentication.' };
+        return { authorizeUrl: flow.verificationUri, verificationUri: flow.verificationUri, userCode: flow.userCode, deviceCode: flow.deviceCode, state: flow.state, flowType, interval: flow.interval, message: flowType === 'device_code' ? `Go to ${flow.verificationUri} and enter code: ${flow.userCode}` : 'Open the authorisation URL to complete reauthentication.' };
       } catch (error: any) {
         return reply.code(400).send({ error: error?.message || 'Unable to start reauthentication flow' });
       }
@@ -874,6 +940,72 @@ export class ManagementApi {
         const message = encodeURIComponent(error?.message || 'OAuth completion failed');
         return reply.redirect(`/accounts?oauth=error&message=${message}`);
       }
+    });
+
+    // Completes a device-authorisation flow started by the create or reauth route.
+    //
+    // The token exchange needs the client secret, so it has to happen server-side; the
+    // browser drives the cadence and never sees the device code. One attempt per call —
+    // holding the request open for the life of the flow would pin a connection, and the
+    // browser can report progress between attempts.
+    this.app.post('/api/oauth/device/poll', async (request: any, reply: any) => {
+      const { state } = request.body || {};
+      if (!state) return reply.code(400).send({ error: 'state required' });
+
+      const oauthState = await this.storage.getOAuthState(String(state));
+      if (!oauthState) return reply.code(404).send({ error: 'Unknown or expired authorisation state' });
+      if (oauthState.flowType !== 'device_code' || !oauthState.deviceCode) {
+        return reply.code(400).send({ error: 'This authorisation is not a device flow' });
+      }
+      if (!oauthState.accountId) {
+        return reply.code(400).send({ error: 'This authorisation is not linked to an account' });
+      }
+
+      // Only the owner of the pending account may complete it.
+      const account = await this.storage.getAccount(oauthState.accountId);
+      if (!account || account.ownerId !== request.user.id) {
+        return reply.code(404).send({ error: 'Account not found' });
+      }
+
+      const config = OAuthManager.clientToConfig(
+        {
+          provider: oauthState.provider,
+          clientId: oauthState.clientId,
+          clientSecret: oauthState.clientSecret || '',
+          scopes: oauthState.scopes || [],
+          tenantId: oauthState.tenantId,
+          accountsServer: oauthState.accountsServer,
+        },
+        oauthState.redirectUri || '',
+      );
+
+      const result = await this.oauthManager.pollDeviceCodeOnce(oauthState.deviceCode, config);
+
+      if (result.status === 'complete') {
+        // Deliberately the same completion as /oauth/callback, so a device flow and a
+        // browser flow leave the account in exactly the same state.
+        await this.storage.updateCredentials(account.id, {
+          accessToken: result.tokens.accessToken,
+          refreshToken: result.tokens.refreshToken,
+          expiryDate: result.tokens.expiresAt,
+          scope: result.tokens.scope,
+          idToken: result.tokens.idToken,
+          tokenType: result.tokens.tokenType,
+          clientId: oauthState.clientId,
+          clientSecret: oauthState.clientSecret,
+          config: { accountsServer: oauthState.accountsServer },
+        } as any);
+        await this.storage.updateAccount(account.id, { status: 'active', health: 'unknown' });
+        await this.storage.deleteOAuthState(String(state));
+        return {
+          status: 'complete',
+          account: { id: account.id, slug: account.slug, name: account.name },
+        };
+      }
+
+      return result.status === 'pending'
+        ? { status: 'pending' }
+        : { status: result.status, message: result.message };
     });
 
     // --- OAuth clients (per-user) ---
