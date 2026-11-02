@@ -256,9 +256,12 @@ export interface ListMessagesOptions {
 export interface ListFoldersOptions {
   /**
    * When false, providers make no extra calls to determine unread counts and skip any expensive
-   * per-folder work. Counts that arrive in the same request the provider already needs (Gmail
-   * `labels.list`, Graph `mailFolders`) are still returned because they cost nothing; otherwise
-   * `unreadCount` is {@link UNKNOWN_COUNT}.
+   * per-folder work. Counts that arrive in the same request the provider already needs — Graph
+   * `mailFolders` carries `unreadItemCount` — are still returned because they cost nothing.
+   *
+   * Gmail is deliberately not in that group: `labels.list` never returns message counts, so an
+   * exact count needs a `users.labels.get` per folder and this path reports {@link UNKNOWN_COUNT}
+   * instead of paying for them.
    */
   withUnreadCounts?: boolean;
   /**
