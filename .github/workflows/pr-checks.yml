@@ -27,7 +27,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Check out source
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           # Full history: the whitespace check diffs HEAD^..HEAD.
           fetch-depth: 0
