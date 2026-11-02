@@ -25,7 +25,10 @@ services:
     restart: unless-stopped
     ports:
       # HOST_PORT (left side) maps to the container's internal PORT (always 3001).
-      - "${HOST_PORT:-3001}:3001"
+      # Bound to 127.0.0.1 so the port is not exposed on the local network: put a
+      # reverse proxy or tunnel on the host in front of it. Widen this only if you
+      # really intend the container to be reachable directly.
+      - "127.0.0.1:${HOST_PORT:-3001}:3001"
     environment:
       # Required — used to encrypt stored credentials (AES-256-GCM)
       MCP_ENCRYPTION_KEY: ${MCP_ENCRYPTION_KEY}

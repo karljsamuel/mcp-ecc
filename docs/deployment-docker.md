@@ -196,7 +196,9 @@ For local desktop agents (Claude, Cursor) that prefer **stdio**, use the CLI as 
 
 | Symptom | Fix |
 |---------|-----|
-| `better-sqlite3` fails to build during `docker build` | The provided `Dockerfile` installs `python3`, `make`, `g++` in the builder stage |
+| `docker build` succeeds but the image is broken; dependents fail with `Cannot find module '@mcp-ecc/core'` | A stale `*.tsbuildinfo` reaching the build context makes `tsc` treat the project as up to date and emit nothing. The Dockerfile runs `npm run clean` before `npm run build` — keep that ordering |
+| Setup page unreachable at `http://<host-ip>:3001/setup` | The port is published on `127.0.0.1`, so it is reachable only from the host. Use host loopback, or go through your tunnel / reverse proxy |
+| Server starts, then every `/api/*` returns `503` | It is in setup mode. Finish the wizard, or provide a complete `.env` via `--env-file` |
 | Web UI shows "account connected" but server can't read mail | Confirm the provider's OAuth scopes include mail/calendar/contacts; see the provider docs |
 | MCP client gets "Already connected to a transport" | Each HTTP session must use its own `Mcp-Session-Id`; ensure your client persists it |
 | `GET /mcp` not streaming | Streamable HTTP requires the `Accept: application/json, text/event-stream` header |
