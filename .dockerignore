@@ -1,13 +1,12 @@
 node_modules
-dist
+**/dist
 .turbo
 .git
 out
 .env
 config.json
-*.tsbuildinfo
-packages/*/node_modules
-packages/*/dist
+**/*.tsbuildinfo
+**/node_modules
 packages/*/src/*.js
 packages/*/src/*.d.ts
 packages/*/src/*.map

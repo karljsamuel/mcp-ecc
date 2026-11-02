@@ -15,9 +15,12 @@ RUN apk upgrade --no-cache && apk add --no-cache python3 make g++ && npm install
 COPY package.json package-lock.json turbo.json ./
 COPY packages/ ./packages/
 
-# Install all workspace dependencies and compile
+# Install all workspace dependencies and compile.
+# Clean first: `composite`/`incremental` builds trust .tsbuildinfo, so a stale
+# one arriving in the build context without its dist/ makes tsc emit nothing and
+# silently produce an empty package.
 RUN npm ci --legacy-peer-deps
-RUN npx turbo run build
+RUN npm run clean && npm run build
 
 # --- runner: minimal image, production deps only ---
 FROM node:26-alpine AS runner
