@@ -61,6 +61,53 @@ While setup is incomplete, every API route except `/api/setup/*` answers `503`.
 The setup token is the only thing protecting that page until an admin exists, so
 do not publish the port beyond loopback until setup has completed.
 
+#### Volume permissions (bind mounts)
+
+The container runs as **uid 1001** (the `mcp-ecc` user), not root. A **named volume**
+is seeded with that ownership automatically. A **bind mount** is not — Docker mounts
+the host directory exactly as it is, so if it is owned by `root` the app can read it
+but cannot write, and you get `EACCES: permission denied` on `/data` (or a database
+that never initialises).
+
+If you use a bind mount — as `docker-compose.yml` does with `./data:/data` — prepare
+the directory with the container's uid before starting:
+
+```bash
+mkdir -p ./data
+sudo chown -R 1001:1001 ./data
+sudo chmod 2775 ./data     # optional: keeps group access for host users
+```
+
+Then confirm from inside the container:
+
+```bash
+docker exec mcp-ecc sh -c 'touch /data/.probe && rm /data/.probe && echo writable'
+```
+
+Symptoms of getting this wrong: a `permission denied` line in `docker logs`, a
+crash/restart loop, and a **502** from your reverse proxy or tunnel because nothing
+ends up listening on the published port.
+
+#### The `.env` must sit beside `docker-compose.yml`
+
+Compose interpolates `${MCP_ENCRYPTION_KEY}`, `${CLOUDFLARE_API_TOKEN}` and friends
+from a `.env` in the **same directory as the compose file**. If that file is missing
+or misnamed, every variable resolves to an empty string and the container starts in
+**setup mode** — which looks like an outage: `/health` returns `200` while `/mcp` and
+`/api/*` return `503`, and the logs say `is unconfigured and running in SETUP MODE`.
+
+Check that the file is where compose expects it, and that the keys are actually
+present (this prints variable names only, never values):
+
+```bash
+ls -la /path/to/compose-dir/.env
+grep -oE '^[A-Z_]+=' /path/to/compose-dir/.env
+```
+
+Note that environment variables are captured when a container is **created**. If you
+edit `.env` or rotate a credential, recreate the container — `docker compose up -d
+--force-recreate` — or the running container keeps the old values.
+
 #### Persisting the generated configuration
 
 A `.env` written inside a container is lost when the container is recreated, so
