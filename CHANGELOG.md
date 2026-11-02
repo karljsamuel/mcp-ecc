@@ -103,3 +103,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   nothing. CI now runs `node --test tests/*.test.cjs tests/*.test.mjs` after the
   build as a failing gate, and fails loudly if either suite family disappears —
   `node --test` treats an unmatched glob as a passing no-op.
+
+### Known issues
+
+- `npm audit --omit=dev` reports **3 moderate advisories** in the production tree:
+  `glob` < 14.0.2 and `minimatch` < 11.0.1, both reached through
+  `@fastify/static`. They cannot be resolved from this repository.
+  `@fastify/static` declares `glob: ^13` and `eslint` declares `minimatch: ^10.2.5`,
+  so forcing the fixed majors through `overrides` leaves an invalid tree — npm
+  either ignores the override or removes the packages outright, which breaks
+  both consumers. This clears when those dependencies widen their ranges;
+  Dependabot's weekly npm updates will surface it.
+
+  **The vulnerable code path is not reachable here.** `@fastify/static` does
+  `require('glob')` at import time, so the module is loaded — but its only `glob()`
+  call site is guarded by `opts.wildcard === false` (that branch pre-registers a
+  route per file). This server registers the plugin with `root` and `prefix` only,
+  passing neither `wildcard` nor `list`, so it takes the `send`-based route and
+  `glob()` is never called.
+
+  Verified at runtime by instrumenting `require.cache` while serving `/setup`:
+  `glob` is loaded, **`minimatch` is never loaded** — so the ReDoS code path is not
+  even in memory. The separate `glob` AbortSignal advisory requires calling
+  `glob()` with a signal, which this application never does. In development
+  `minimatch` is only used by `eslint`, over this repository's own ignore patterns
+  rather than untrusted input.
