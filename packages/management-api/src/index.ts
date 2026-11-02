@@ -52,7 +52,12 @@ export interface SetupModeConfig {
   envPath?: string;
   /** Provider defaults offered by the wizard. */
   defaultAnswers?: SetupAnswers;
-  /** Tests only: relax the loopback restriction. */
+  /**
+   * Relax the loopback restriction. Required in containers: Docker forwards the
+   * published port to the container's eth0, so setup requests arrive from the
+   * bridge gateway, never from loopback. Isolation then rests on publishing the
+   * host port on 127.0.0.1 plus the one-time token.
+   */
   allowNonLoopback?: boolean;
 }
 

@@ -10,7 +10,7 @@ import {
   isRunningInContainer,
   loadEnv,
   resolveEnvPath,
-  SETUP_MODE_HOST,
+  setupModeHost,
   type DBConnectionProbe,
   type SetupD1Config,
 } from '@mcp-ecc/core';
@@ -101,8 +101,13 @@ function attachShutdown(api: ManagementApi): void {
  */
 async function startSetupMode(missing: string[]): Promise<void> {
   const token = generateSetupToken();
-  const host = SETUP_MODE_HOST; // override the 0.0.0.0 default while unconfigured
-  const setupUrl = `http://${host}:${PORT}/setup`;
+  const inContainer = isRunningInContainer();
+  // In a container the listener must sit on 0.0.0.0: Docker forwards the
+  // published port to eth0, so a loopback bind would be unreachable from the host.
+  const host = setupModeHost();
+  const setupUrl = inContainer
+    ? `${PUBLIC_URL.replace(/\/+$/, '')}/setup`
+    : `http://127.0.0.1:${PORT}/setup`;
 
   const api = new ManagementApi({
     createStorage: (cfg) => buildStorage(cfg),
@@ -112,7 +117,12 @@ async function startSetupMode(missing: string[]): Promise<void> {
     publicDir,
     publicUrl: PUBLIC_URL,
     sessionSecret: SESSION_SECRET,
-    setup: { token, envPath: resolveEnvPath() },
+    setup: {
+      token,
+      envPath: resolveEnvPath(),
+      // Setup requests reach a container via the bridge gateway, not loopback.
+      allowNonLoopback: inContainer,
+    },
   });
 
   // The token goes to stdout ONLY: the Fastify logger must never see it, and it
@@ -124,12 +134,23 @@ async function startSetupMode(missing: string[]): Promise<void> {
     '',
     `  Setup token: ${token}`,
     '',
-    '  1. Open the setup page (this machine only):',
+    inContainer
+      ? '  1. Open the setup page at:'
+      : '  1. Open the setup page (this machine only):',
     `       ${setupUrl}`,
     '  2. Paste the setup token printed above.',
     '  3. Choose the database, let it verify the connection, then create the admin account.',
     '',
   ];
+  if (inContainer) {
+    lines.push(
+      `  Container: listening on ${host} so the published host port can reach it.`,
+      '  Publish the port on the host loopback to keep it off the local network, e.g.',
+      '    -p 127.0.0.1:<host-port>:3001',
+      '  Until an admin account exists the setup token is the only thing protecting this page.',
+      '',
+    );
+  }
   if (isRunningInContainer() && containerNeedsEnvHandoff()) {
     lines.push(
       '  Container detected: the final step shows a modal that copies the .env content',

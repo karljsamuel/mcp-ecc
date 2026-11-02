@@ -166,9 +166,22 @@ export interface SetupStepValidation {
 
 export const SETUP_DEFAULT_PORT = '3001';
 export const SETUP_DEFAULT_HOST = '0.0.0.0';
-/** Bind address used while the API runs in setup mode. */
+/** Bind address used while the API runs in setup mode on a normal install. */
 export const SETUP_MODE_HOST = '127.0.0.1';
 export const MIN_ENCRYPTION_KEY_LENGTH = 32;
+
+/**
+ * Bind address for setup mode.
+ *
+ * A container must listen on every interface: Docker publishes ports to the
+ * container's eth0, so a listener bound to the container's loopback is
+ * unreachable from the host and the setup page could never be opened. Isolation
+ * comes from publishing the host port on 127.0.0.1 instead, and from the
+ * one-time setup token.
+ */
+export function setupModeHost(): string {
+  return isRunningInContainer() ? SETUP_DEFAULT_HOST : SETUP_MODE_HOST;
+}
 
 export function defaultStorageFile(cwd: string = process.cwd()): string {
   return resolvePath(cwd, 'data', 'mcp-ecc.db');
