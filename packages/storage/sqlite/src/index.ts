@@ -269,8 +269,8 @@ export class SQLiteStorage implements StorageAdapter {
   async saveAccount(account: Account): Promise<void> {
     const encCreds = this.encryptFor(JSON.stringify(account.credentials || {}), account.ownerId);
     const stmt = this.db.prepare(`
-      INSERT OR REPLACE INTO accounts (id, ownerId, provider, name, slug, email, status, credentials, encryptionKeyGeneration, createdAt, updatedAt)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT OR REPLACE INTO accounts (id, ownerId, provider, name, slug, email, displayName, status, credentials, encryptionKeyGeneration, createdAt, updatedAt)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     stmt.run(
       account.id,
@@ -279,6 +279,7 @@ export class SQLiteStorage implements StorageAdapter {
       account.name || null,
       account.slug,
       account.email,
+      account.displayName ?? null,
       account.status,
       encCreds,
       this.encryptionKeyGeneration,
@@ -314,6 +315,7 @@ export class SQLiteStorage implements StorageAdapter {
       name: row.name || undefined,
       slug: row.slug,
       email: row.email,
+      displayName: row.displayName || undefined,
       status: row.status,
       health: 'unknown',
       credentials,

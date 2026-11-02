@@ -267,6 +267,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigration[] = [
     { table: 'oauth_clients', name: { sqlite: 'encryptionKeyGeneration', d1: 'encryption_key_generation' }, definition: 'INTEGER NOT NULL DEFAULT 1' },
     { table: 'users', name: { sqlite: 'encryptionKeyGeneration', d1: 'encryption_key_generation' }, definition: 'INTEGER NOT NULL DEFAULT 1' },
   ] },
+  // v5: account display name on SQLite. D1 gained `display_name` in v2, but the
+  // SQLite accounts table never had the column, so a display name accepted by
+  // PATCH /api/accounts/:id was silently dropped and outbound mail fell back to
+  // the internal account id instead of a real sender identity.
+  { version: 5, name: 'account-display-name-sqlite', columns: [
+    { table: 'accounts', name: { sqlite: 'displayName', d1: 'display_name' }, definition: 'TEXT', backends: ['sqlite'] },
+  ] },
 ];
 
 export const MIGRATION_LEDGER_SQL = `CREATE TABLE IF NOT EXISTS schema_migrations (
