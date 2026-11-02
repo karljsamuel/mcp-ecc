@@ -12,7 +12,7 @@ A Model Context Protocol (MCP) server that lets AI assistants read, write and ma
 ![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)
 ![Version](https://img.shields.io/badge/version-0.7.0-purple)
 [![Sponsor](https://img.shields.io/github/sponsors/karljsamuel?color=ea4aaa&logo=github-sponsors&logoColor=white)](https://github.com/sponsors/karljsamuel)
-![Node](https://img.shields.io/badge/node-%3E%3D24-339933?logo=nodedotjs&logoColor=white)
+![Node](https://img.shields.io/badge/node-%3E%3D26-339933?logo=nodedotjs&logoColor=white)
 ![MCP](https://img.shields.io/badge/Model%20Context%20Protocol-black)
 ![Docker](https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white)
 ![Multi-arch](https://img.shields.io/badge/arch-amd64%20%7C%20arm64-lightgrey)
@@ -36,14 +36,71 @@ A Model Context Protocol (MCP) server that lets AI assistants read, write and ma
 
 ```bash
 docker run -d --name mcp-ecc \
-  -p 3001:3001 \
+  -p 127.0.0.1:3001:3001 \
   -v mcp-ecc-data:/data \
   karljsamuel/mcp-ecc:latest
 ```
 
-With no configuration the container starts in **setup mode**: it prints a one-time setup token, binds to `127.0.0.1` only, and serves just the setup page. Open **http://localhost:3001/setup**, paste the token, choose the database, and let it verify the connection.
+Publish the port on `127.0.0.1` as above. The container listens on `0.0.0.0`
+internally so the published port can reach it — the loopback restriction on the
+*host* side is what keeps it off your network. Put a reverse proxy or tunnel in
+front before widening that.
 
-Because a `.env` written inside a container is lost when the container is recreated, the final step offers a **copy** button instead of displaying the file. Paste the result into the `.env` beside your `docker-compose.yml` and pass the variables through, then restart.
+With no configuration the container starts in **setup mode**. Read the one-time
+setup token from the logs:
+
+```bash
+docker logs mcp-ecc 2>&1 | grep "Setup token:"
+```
+
+Then open **http://127.0.0.1:3001/setup**, paste the token, and work through the
+wizard: choose SQLite or Cloudflare D1, let it **verify the connection**, generate
+an encryption key, set the server options, and create the first admin account.
+
+While setup is incomplete, every API route except `/api/setup/*` answers `503`.
+The setup token is the only thing protecting that page until an admin exists, so
+do not publish the port beyond loopback until setup has completed.
+
+#### Persisting the generated configuration
+
+A `.env` written inside a container is lost when the container is recreated, so
+the wizard hands you the content through a **copy** button instead of writing it.
+Put it somewhere durable and give it to the container by reference:
+
+```bash
+# paste the copied content into ./mcp-ecc.env first
+docker rm -f mcp-ecc
+docker run -d --name mcp-ecc \
+  -p 127.0.0.1:3001:3001 \
+  -v mcp-ecc-data:/data \
+  --env-file ./mcp-ecc.env \
+  karljsamuel/mcp-ecc:latest
+```
+
+Alternatively, mount a writable location and point `MCP_ENV_FILE` at it. The
+wizard then writes the file itself — no copy step, no restart — because the path
+is known to survive:
+
+```bash
+docker run -d --name mcp-ecc \
+  -p 127.0.0.1:3001:3001 \
+  -v mcp-ecc-data:/data \
+  -e MCP_ENV_FILE=/data/.env \
+  karljsamuel/mcp-ecc:latest
+```
+
+#### Behind Cloudflare Tunnel or another reverse proxy
+
+Set `PUBLIC_URL` to the public address — OAuth callbacks and the MCP endpoint URL
+are built from it, so `localhost` will break them:
+
+```bash
+-e PUBLIC_URL=https://mcp-ecc.example.com
+```
+
+If you put Cloudflare Access in front, leave a bypass for `/mcp`: MCP clients
+authenticate with per-user Bearer keys and cannot complete an interactive login.
+
 
 ### Web UI
 

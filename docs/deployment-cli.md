@@ -25,7 +25,7 @@ mcp-ecc --help
 
 ## 2. Configure environment (optional)
 
-Create a `.env` file **in the directory where you run mcp-ecc**. The only variable strictly required for encrypted credential storage is the encryption key. If it is omitted, credentials are stored with a default key (not recommended).
+Create a `.env` file **in the directory where you run mcp-ecc** — or point `MCP_ENV_FILE` at it from anywhere. The only variable strictly required for encrypted credential storage is the encryption key. **There is no fallback key:** if it is missing, or set to a placeholder such as `default-secret-key`, the process refuses to start rather than encrypt real credentials under a known value. Run `mcp-ecc setup` to have a key generated and a valid `.env` written for you.
 
 ```dotenv
 # Required — used to encrypt stored credentials (AES)

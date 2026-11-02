@@ -56,6 +56,7 @@ mcp-ecc › exit
 
 | Command | Purpose |
 |---------|---------|
+| `mcp-ecc setup` | First-run setup: choose the database, verify it, generate an encryption key, write `.env`, create the first admin |
 | `mcp-ecc login` | Log in, or bootstrap the first admin account on first run |
 | `mcp-ecc logout` | End the current session |
 | `mcp-ecc status` | Show login status, username, display name and role |
@@ -67,6 +68,57 @@ mcp-ecc › exit
 | `mcp-ecc reauthenticate [slug]` | Re-run OAuth for a failed/expired OAuth account |
 | `mcp-ecc remove account` | Delete a configured account |
 | `mcp-ecc start` | Start the MCP server over stdio for an agent host |
+
+## First run: setup
+
+Run setup once before anything else. It chooses the database, verifies it,
+generates the encryption key, writes `.env`, and creates the first admin account:
+
+```text
+$ mcp-ecc setup
+mcp-ecc first-run setup
+This writes a .env file and prepares the database.
+
+Database provider
+  1. SQLite (local file, zero configuration)
+  2. Cloudflare D1 (hosted, needs API credentials)
+Choice [1-2] (default sqlite):
+
+SQLite database file [.../data/mcp-ecc.db]:
+Verifying the sqlite connection…
+Database connection verified.
+
+Generate a new MCP_ENCRYPTION_KEY? [Y/n]:
+MCP_ENCRYPTION_KEY will be generated and written to the .env file.
+
+PORT [3001]:
+HOST (bind address) [0.0.0.0]:
+PUBLIC_URL [http://localhost:3001]:
+SESSION_SECRET will be generated independently of the master key.
+
+Create the administrator account now? [Y/n]:
+Admin username:
+Admin password:
+Confirm admin password:
+
+Configuration written to .../.env (mode 600).
+```
+
+Worth knowing about the flow:
+
+- **The database connection is verified before anything is written.** A
+  configuration that does not connect is never persisted, so a typo in a D1 token
+  or a path fails immediately rather than at first use.
+- **`setup` runs when nothing is configured** — that is the point, it is the command
+  that creates the configuration. Every other command that needs a database will
+  instead print `` Run `mcp-ecc setup` `` and exit non-zero.
+- **`SESSION_SECRET` is generated separately from `MCP_ENCRYPTION_KEY`**, so rotating
+  the encryption key no longer invalidates existing sessions.
+- **The `.env` file is written with mode 600 and never printed.**
+- Re-running `setup` on a configured instance reports what is missing and leaves a
+  complete configuration alone rather than overwriting it.
+
+If you skip the admin step, create it later with `mcp-ecc login`.
 
 ## First run: create the admin account
 
@@ -264,14 +316,17 @@ If `mcp-ecc` is not on the agent host's PATH, use the full path — e.g. `comman
 
 ## Storage & environment
 
-- **Database:** SQLite at `data/mcp-ecc.db` (override with `MCP_STORAGE_FILE`). Created automatically on first run.
-- **Credentials:** stored inside the database in the `accounts` table's `credentials` column, AES-encrypted with `MCP_ENCRYPTION_KEY`. There is no separate token file.
-- **Encryption key:** set `MCP_ENCRYPTION_KEY` in the environment or `.env` at the repository root. If omitted, a default key is used — set it explicitly in production.
+- **Database:** SQLite at `data/mcp-ecc.db` (override with `MCP_STORAGE_FILE`), or Cloudflare D1. Created automatically on first run.
+- **Credentials:** stored inside the database, encrypted with AES-256-GCM using a key derived **per owner** (HKDF-SHA256 over `MCP_ENCRYPTION_KEY`). There is no separate token file, and a value encrypted for one owner cannot be decrypted as another.
+- **Encryption key:** set `MCP_ENCRYPTION_KEY` in the environment or `.env`. **There is no fallback.** A missing key, or a placeholder such as `default-secret-key` or the value shipped in `.env.example`, is a hard startup error — credentials are never encrypted under a publicly known string. Run `mcp-ecc setup` to have one generated.
+- **Where `.env` is read from:** `MCP_ENV_FILE` if set, otherwise `.env` in the current working directory. That is what lets the same package work for a global install, a local checkout, and a container.
+- **Rotating the key:** set the new `MCP_ENCRYPTION_KEY`, list the old one in `MCP_ENCRYPTION_KEY_PREVIOUS` as `"<generation>:<key>"`, then rotate. Both generations decrypt during the changeover. See the README for the full procedure.
 - **OAuth clients** (client ID/secret) are stored in the same database, per user.
 
 ```dotenv
 # .env
 MCP_ENCRYPTION_KEY=your-long-random-secret
+SESSION_SECRET=a-separate-random-value
 ```
 
 ## Exit codes and non-interactive use
