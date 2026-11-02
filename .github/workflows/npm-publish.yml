@@ -9,9 +9,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Semver to publish (e.g. 0.5.1)'
+        description: 'Semver to publish (e.g. 0.7.0)'
         required: true
-        default: '0.6.0'
+        default: '0.7.0'
 
 jobs:
   publish:
@@ -20,11 +20,11 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version: 26
           registry-url: https://registry.npmjs.org
           cache: npm
 
@@ -55,13 +55,34 @@ jobs:
             echo "npm_tag=latest" >> "$GITHUB_OUTPUT"
           fi
 
+      # Clean first: composite/incremental tsc trusts .tsbuildinfo, so a stale one
+      # surviving without its dist/ makes tsc emit nothing and silently produce an
+      # empty package that still "builds".
       - name: Build all packages
-        run: npx turbo run build
+        run: npm run clean && npm run build
+
+      # Never publish unverified. These suites consume the built dist output, so
+      # they must run after the build. Fail loudly if either suite family is
+      # missing: node --test treats an unmatched glob as a passing no-op.
+      - name: Run test suites
+        run: |
+          shopt -s nullglob
+          cjs=(tests/*.test.cjs)
+          mjs=(tests/*.test.mjs)
+          if [ ${#cjs[@]} -eq 0 ] || [ ${#mjs[@]} -eq 0 ]; then
+            echo "::error::Expected at least one tests/*.test.cjs and one tests/*.test.mjs suite; found cjs=${#cjs[@]} mjs=${#mjs[@]}. Refusing to publish unverified."
+            exit 1
+          fi
+          node --test tests/*.test.cjs tests/*.test.mjs
 
       - name: Rewrite file deps to npm versions
         run: node scripts/rewrite-file-deps.mjs
 
       - name: Publish internal @mcp-ecc packages
+        # The tag travels via env, never interpolated into the shell text, so a
+        # step output can't become part of the command line.
+        env:
+          NPM_TAG: ${{ steps.version.outputs.npm_tag }}
         run: |
           set -e
           for pkg in \
@@ -77,8 +98,10 @@ jobs:
             packages/mcp-server \
             packages/management-api; do
             echo "publishing $pkg"
-            npm publish "./$pkg" --access public --provenance --tag "${{ steps.version.outputs.npm_tag }}"
+            npm publish "./$pkg" --access public --provenance --tag "$NPM_TAG"
           done
 
       - name: Publish entry package
-        run: npm publish ./packages/cli --access public --provenance --tag "${{ steps.version.outputs.npm_tag }}"
+        env:
+          NPM_TAG: ${{ steps.version.outputs.npm_tag }}
+        run: npm publish ./packages/cli --access public --provenance --tag "$NPM_TAG"

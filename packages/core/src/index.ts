@@ -7,3 +7,9 @@ export * from './auth.js';
 
 // Utility functions
 export { generateId, sanitizeForLog, delay, retry, slugify, generateSlug } from './utils.js';
+
+// Configuration utilities
+export * from './config.js';
+
+// First-run setup engine (shared by the CLI and the management API)
+export * from './setup.js';

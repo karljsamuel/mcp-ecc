@@ -239,7 +239,8 @@ export class McpEccServer {
 
       if (resourcePath === 'mail/folders') {
         if (!providers.mail) throw new Error('Mail not supported for this account');
-        const folders = await providers.mail.listFolders();
+        // Exact per-folder unread counts are the default; be explicit at this call site.
+        const folders = await providers.mail.listFolders({ withUnreadCounts: true });
         return {
           contents: [{ uri, mimeType: 'application/json', text: JSON.stringify(folders, null, 2) }],
         };
@@ -313,8 +314,20 @@ export class McpEccServer {
         // Mail tools
         {
           name: 'mail.listFolders',
-          description: 'List mail folders for an account',
-          inputSchema: { type: 'object', properties: { accountId: { type: 'string' } }, required: ['accountId'] },
+          description:
+            'List mail folders for an account. Each folder carries an exact unreadCount. ' +
+            'Pass folderId to fetch one folder (and its exact unread count) in a single probe. ' +
+            'Pass withUnreadCounts:false for a cheap folder-name-only listing (~1 request; ' +
+            'unreadCount is reported as -1 when it cannot be measured for free).',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              accountId: { type: 'string' },
+              folderId: { type: 'string', description: 'Return only this folder (id or name), with its exact unread count' },
+              withUnreadCounts: { type: 'boolean', description: 'Default true (exact per-folder counts). false = one-round-trip listing, counts may be -1.' },
+            },
+            required: ['accountId'],
+          },
         },
         {
           name: 'mail.listMessages',
@@ -551,7 +564,9 @@ export class McpEccServer {
 
           if (types.includes('mail') && providers.mail) {
             try {
-              const folders = await providers.mail.listFolders();
+              // The sync crawls every folder's messages right after this, so folder unread
+              // counts are not needed: ask for the cheap single-round-trip listing.
+              const folders = await providers.mail.listFolders({ withUnreadCounts: false });
               await this.storage.saveMailFolders(account.id, folders);
               let count = 0;
               for (const folder of folders) {
@@ -612,10 +627,17 @@ export class McpEccServer {
 
         // Mail tools
         else if (name === 'mail.listFolders') {
-          const args_ = args as { accountId: string };
+          const args_ = args as { accountId: string; folderId?: string; withUnreadCounts?: boolean };
           const providers = await this.getOrCreateProviders(args_.accountId);
           if (!providers.mail) throw new Error('Mail not supported for this account');
-          result = { folders: await providers.mail.listFolders() };
+          // Default to exact per-folder counts (withUnreadCounts !== false); a caller that only
+          // needs names opts out explicitly.
+          result = {
+            folders: await providers.mail.listFolders({
+              folderId: args_.folderId,
+              withUnreadCounts: args_.withUnreadCounts !== false,
+            }),
+          };
         }
         else if (name === 'mail.listMessages') {
           const args_ = args as { accountId: string; folderId: string; limit?: number; cursor?: string; query?: string };

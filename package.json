@@ -1,6 +1,6 @@
 {
   "name": "mcp-ecc",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "MCP Server for Email, Calendar, and Contacts with Headless OAuth Support",
   "private": true,
   "workspaces": [
@@ -19,14 +19,13 @@
     "api": "node packages/management-api/dist/index.js"
   },
   "devDependencies": {
-    "@types/node": "^24.0.0",
-    "husky": "^9.0.0",
-    "prettier": "^3.2.0",
-    "turbo": "^2.10.0",
-    "typescript": "^5.5.0"
+    "@types/node": "^26.6.6",
+    "prettier": "^3.9.10",
+    "turbo": "^2.11.10",
+    "typescript": "^7.0.2"
   },
   "engines": {
-    "node": ">=24.0.0"
+    "node": ">=26.0.0"
   },
   "packageManager": "npm@10.8.0",
   "license": "MIT",
@@ -34,6 +33,8 @@
     "ip-address": "^10.7.0",
     "qs": "^6.16.0",
     "tar": "^7.5.22",
-    "undici": "^8.10.2"
+    "undici": "^8.10.2",
+    "glob": "^14.0.3",
+    "minimatch": "^11.0.4"
   }
 }

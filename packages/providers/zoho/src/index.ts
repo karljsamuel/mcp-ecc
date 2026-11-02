@@ -1,3 +1,4 @@
+import { UNKNOWN_COUNT } from '@mcp-ecc/core';
 import type {
   AccountCredentials,
   IMailProvider,
@@ -10,6 +11,7 @@ import type {
   Contact,
   EmailAddress,
   ListMessagesOptions,
+  ListFoldersOptions,
   SearchOptions,
   SendMessageInput,
   ListEventsOptions,
@@ -20,6 +22,13 @@ import type {
   UpdateContactInput,
   PaginatedResult,
 } from '@mcp-ecc/core';
+
+/** Result of measuring one folder's unread count. `unread` is absent when the measurement failed. */
+interface FolderUnreadMeasurement {
+  unread?: number;
+  total?: number;
+  error?: string;
+}
 
 export class ZohoProvider implements IMailProvider, ICalendarProvider, IContactsProvider {
   private mailAccountId: string | null = null;
@@ -105,22 +114,160 @@ export class ZohoProvider implements IMailProvider, ICalendarProvider, IContacts
 
   // --- IMailProvider ---
 
-  async listFolders(): Promise<MailFolder[]> {
+  /**
+   * Hard bounds so that an exact count can never hang a caller. A full scan of a folder costs
+   * ceil(messages / page-size) requests, at most UNREAD_SCAN_MAX_PAGES of them, and the whole
+   * scan shares one wall-clock budget.
+   */
+  private static readonly UNREAD_SCAN_PAGE_SIZE = 200; // Zoho messages/view page limit
+  private static readonly UNREAD_SCAN_MAX_PAGES = 10; // <= 2000 messages scanned per folder
+  private static readonly UNREAD_SCAN_CONCURRENCY = 4; // folders measured in parallel
+  private static readonly UNREAD_SCAN_BUDGET_MS = 20_000; // wall clock for the whole scan
+  private static readonly UNREAD_SCAN_REQUEST_TIMEOUT_MS = 10_000; // per HTTP request
+
+  async listFolders(options: ListFoldersOptions = {}): Promise<MailFolder[]> {
     const zuid = await this.getZohoMailAccountId();
     const res = await this.fetchZoho<any>(
       `https://mail.zoho.com/api/v1/accounts/${zuid}/folders`
     );
 
-    return (res.data || []).map((f: any) => ({
-      id: f.folderId,
-      name: f.folderName,
-      parentId: f.parentFolderId,
-      type: this.mapFolderType(f.folderName),
-      unreadCount: f.unreadCount || 0,
-      totalCount: f.messageCount || 0,
-      createdAt: 0,
-      updatedAt: 0,
-    }));
+    const allFolders: any[] = Array.isArray(res.data) ? res.data : [];
+    const folders = options.folderId
+      ? allFolders.filter(f => this.matchesFolderFilter(f.folderId, f.folderName, options.folderId))
+      : allFolders;
+
+    // Neither cheap Zoho source is an exact per-folder unread count:
+    //  - the folder list's own `unreadCount` counter is stale;
+    //  - `messages/view?folderId=X&status=0` is documented in this file (see listMessages) to
+    //    ignore the folderId and return cross-folder unread totals - i.e. a global number.
+    // So: with counts requested (the default) each folder is measured exactly below; when counts
+    // are not requested we report UNKNOWN_COUNT rather than pass a stale/global number off as a
+    // count.
+    const withCounts = options.withUnreadCounts !== false;
+    const measurements = withCounts
+      ? await this.measureUnreadCounts(zuid, folders)
+      : new Map<string, FolderUnreadMeasurement>();
+
+    return folders.map(f => {
+      const measured = measurements.get(String(f.folderId));
+      const folder: MailFolder = {
+        id: f.folderId,
+        name: f.folderName,
+        parentId: f.parentFolderId,
+        type: this.mapFolderType(f.folderName || ''),
+        unreadCount: measured?.unread !== undefined ? measured.unread : UNKNOWN_COUNT,
+        totalCount:
+          measured?.total !== undefined
+            ? measured.total
+            : typeof f.messageCount === 'number'
+              ? f.messageCount
+              : UNKNOWN_COUNT,
+        createdAt: 0,
+        updatedAt: 0,
+      };
+      if (withCounts && measured?.unread === undefined && measured?.error) {
+        folder.unreadCountError = measured.error;
+      }
+      return folder;
+    });
+  }
+
+  private matchesFolderFilter(id: unknown, name: unknown, folderId?: string): boolean {
+    if (!folderId) return true;
+    const wanted = folderId.trim().toLowerCase();
+    return String(id ?? '').toLowerCase() === wanted || String(name ?? '').toLowerCase() === wanted;
+  }
+
+  /**
+   * Measures every folder's unread count concurrently, with a bounded worker pool.
+   * Returns one entry per folder id; entries with `error` set have no trustworthy count.
+   */
+  private async measureUnreadCounts(
+    zuid: string,
+    folders: any[]
+  ): Promise<Map<string, FolderUnreadMeasurement>> {
+    const results = new Map<string, FolderUnreadMeasurement>();
+    if (!folders.length) return results;
+
+    const deadline = Date.now() + ZohoProvider.UNREAD_SCAN_BUDGET_MS;
+    let cursor = 0;
+    const workers = Array.from(
+      { length: Math.min(ZohoProvider.UNREAD_SCAN_CONCURRENCY, folders.length) },
+      async () => {
+        while (cursor < folders.length) {
+          const folder = folders[cursor++];
+          results.set(String(folder.folderId), await this.measureFolderUnread(zuid, folder, deadline));
+        }
+      }
+    );
+    await Promise.all(workers);
+    return results;
+  }
+
+  /**
+   * Exact unread count for a single folder: page through the folder's messages and count the ones
+   * Zoho reports as unread (same `status === '0'` convention as mapMessage()).
+   *
+   * Why the scan instead of a query: Zoho's STATUS-style shortcut cannot be scoped to a folder.
+   * Why it is bounded: paging is capped at UNREAD_SCAN_MAX_PAGES and the shared deadline; a
+   * folder that hits either bound reports UNKNOWN_COUNT with an explicit `unreadCountError`
+   * instead of a wrong number.
+   */
+  private async measureFolderUnread(
+    zuid: string,
+    folder: any,
+    deadline: number
+  ): Promise<FolderUnreadMeasurement> {
+    const folderId = String(folder.folderId);
+    let unread = 0;
+    let total = 0;
+
+    for (let page = 0; page < ZohoProvider.UNREAD_SCAN_MAX_PAGES; page++) {
+      if (Date.now() > deadline) {
+        return {
+          error: `unread count not determined: ${ZohoProvider.UNREAD_SCAN_BUDGET_MS}ms scan budget exhausted`,
+        };
+      }
+
+      const params = new URLSearchParams({
+        folderId,
+        limit: String(ZohoProvider.UNREAD_SCAN_PAGE_SIZE),
+        start: String(page * ZohoProvider.UNREAD_SCAN_PAGE_SIZE),
+      });
+
+      let body: any;
+      try {
+        body = await this.fetchZoho<any>(
+          `https://mail.zoho.com/api/v1/accounts/${zuid}/messages/view?${params}`,
+          { signal: AbortSignal.timeout(ZohoProvider.UNREAD_SCAN_REQUEST_TIMEOUT_MS) }
+        );
+      } catch (e) {
+        return {
+          error: `unread count not determined: ${e instanceof Error ? e.message : String(e)}`,
+        };
+      }
+
+      const items: any[] = Array.isArray(body?.data) ? body.data : [];
+      total += items.length;
+      for (const item of items) {
+        if (String(item.status) === '0') unread++;
+      }
+
+      // A short page means the folder has been fully scanned.
+      if (items.length < ZohoProvider.UNREAD_SCAN_PAGE_SIZE) {
+        return { unread, total };
+      }
+
+      if (page === ZohoProvider.UNREAD_SCAN_MAX_PAGES - 1) {
+        return {
+          error: `unread count not determined: folder holds more than ${
+            ZohoProvider.UNREAD_SCAN_MAX_PAGES * ZohoProvider.UNREAD_SCAN_PAGE_SIZE
+          } messages (scan cap reached)`,
+        };
+      }
+    }
+
+    return { error: 'unread count not determined: pagination did not terminate' };
   }
 
   async listMessages(folderId: string, options: ListMessagesOptions = {}): Promise<PaginatedResult<EmailMessage>> {

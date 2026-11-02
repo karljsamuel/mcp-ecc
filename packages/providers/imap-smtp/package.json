@@ -1,6 +1,6 @@
 {
   "name": "@mcp-ecc/provider-imap-smtp",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "IMAP/SMTP provider for mcp-ecc",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -20,23 +20,23 @@
   },
   "dependencies": {
     "@mcp-ecc/core": "file:../../core",
+    "imapflow": "^2.9.1",
     "mailparser": "^3.9.17",
-    "nodemailer": "^9.0.6",
-    "imapflow": "^1.7.6"
+    "nodemailer": "^10.2.1"
   },
   "devDependencies": {
-    "typescript": "^5.9.3",
-    "@types/node": "^24.0.0",
     "@types/mailparser": "^3.4.4",
-    "@types/nodemailer": "^7.0.0",
-    "vitest": "^4.1.11",
-    "eslint": "^10.9.1"
+    "@types/node": "^26.6.6",
+    "@types/nodemailer": "^8.0.2",
+    "eslint": "^10.9.1",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.5"
   },
   "publishConfig": {
     "access": "public"
   },
   "engines": {
-    "node": ">=24.0.0"
+    "node": ">=26.0.0"
   },
   "license": "MIT"
 }

@@ -22,3 +22,17 @@ updates:
       github-actions:
         patterns:
           - "*"
+
+  # Tracks the Dockerfile base image. It floats on the Node major
+  # (node:26-alpine) so patch releases are picked up automatically; this keeps it
+  # moving when a new LTS major lands.
+  - package-ecosystem: docker
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    ignore:
+      # Only LTS lines are supported; never jump to a current/alpha major.
+      - dependency-name: "node"
+        update-types: ["version-update:semver-major"]

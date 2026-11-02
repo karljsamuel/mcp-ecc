@@ -210,7 +210,7 @@ export class OAuthManager {
         userCode: data ? (data.user_code ?? data.userCode) ?? '' : '',
         verificationUri: data ? (data.verification_uri ?? data.verification_url ?? data.verificationUri) ?? '' : '',
         expiresIn: data ? (data.expires_in ?? data.expiresIn) ?? 0 : 0,
-        interval: data ? (data.interval ?? 5) ?? 5 : 5,
+        interval: data ? (data.interval ?? 5) : 5,
         state,
         codeVerifier: '',
       };
@@ -274,7 +274,7 @@ export class OAuthManager {
         userCode: data ? (data.user_code ?? data.userCode) ?? '' : '',
         verificationUri: data ? (data.verification_uri ?? data.verification_url ?? data.verificationUri) ?? '' : '',
         expiresIn: data ? (data.expires_in ?? data.expiresIn) ?? 0 : 0,
-        interval: data ? (data.interval ?? 5) ?? 5 : 5,
+        interval: data ? (data.interval ?? 5) : 5,
         state,
         codeVerifier: '',
       };
@@ -339,7 +339,7 @@ export class OAuthManager {
         userCode: data ? (data.user_code ?? data.userCode) ?? '' : '',
         verificationUri: data ? (data.verification_url ?? data.verification_uri_complete ?? data.verification_uri ?? data.verificationUri) ?? '' : '',
         expiresIn: data ? (data.expires_in ?? data.expiresIn) ?? 0 : 0,
-        interval: data ? (data.interval ?? 5) ?? 5 : 5,
+        interval: data ? (data.interval ?? 5) : 5,
         state,
         codeVerifier: '',
       };

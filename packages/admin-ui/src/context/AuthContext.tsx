@@ -15,6 +15,8 @@ interface AuthContextValue {
   user: AuthUser | null;
   loading: boolean;
   needsBootstrap: boolean;
+  /** True while the instance is unconfigured and serving setup mode. */
+  needsSetup: boolean;
   login: (username: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   refresh: () => Promise<AuthUser | null>;
@@ -22,12 +24,13 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
-const PUBLIC_PATHS = ['/login', '/bootstrap'];
+const PUBLIC_PATHS = ['/login', '/bootstrap', '/setup'];
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
   const [needsBootstrap, setNeedsBootstrap] = useState(false);
+  const [needsSetup, setNeedsSetup] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
   const initialCheckDone = useRef(false);
@@ -56,16 +59,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(u);
       setLoading(false);
       setNeedsBootstrap(false);
+      setNeedsSetup(false);
       initialCheckDone.current = true;
       return u;
-    } catch {
+    } catch (err: unknown) {
       if (checkGeneration !== authGeneration.current) return user;
-      // Not logged in — check whether we need to bootstrap the first admin.
-      try {
-        const { needsBootstrap } = await infoApi.bootstrapStatus();
-        setNeedsBootstrap(!!needsBootstrap);
-      } catch {
+      // 503 means the API is unconfigured and running in setup mode: it serves
+      // the UI plus /api/setup/* only. Route the operator to the wizard.
+      const status = (err as { status?: number })?.status;
+      if (status === 503) {
+        setNeedsSetup(true);
         setNeedsBootstrap(false);
+      } else {
+        // Not logged in — check whether we need to bootstrap the first admin.
+        try {
+          const { needsBootstrap } = await infoApi.bootstrapStatus();
+          setNeedsBootstrap(!!needsBootstrap);
+          setNeedsSetup(false);
+        } catch {
+          setNeedsBootstrap(false);
+        }
       }
       setUser(null);
       setLoading(false);
@@ -84,6 +97,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const { user: u } = await authApi.login(username, password);
       setUser(u);
       setNeedsBootstrap(false);
+      setNeedsSetup(false);
     },
     [],
   );
@@ -91,6 +105,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logout = useCallback(async () => {
     setUser(null);
     setNeedsBootstrap(false);
+    setNeedsSetup(false);
     try {
       await authApi.logout();
     } finally {
@@ -99,8 +114,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [navigate]);
 
   const value = useMemo<AuthContextValue>(
-    () => ({ user, loading, needsBootstrap, login, logout, refresh }),
-    [user, loading, needsBootstrap, login, logout, refresh],
+    () => ({ user, loading, needsBootstrap, needsSetup, login, logout, refresh }),
+    [user, loading, needsBootstrap, needsSetup, login, logout, refresh],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

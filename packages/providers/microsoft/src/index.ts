@@ -1,4 +1,5 @@
 import { Client } from '@microsoft/microsoft-graph-client';
+import { UNKNOWN_COUNT } from '@mcp-ecc/core';
 import type {
   AccountCredentials,
   IMailProvider,
@@ -12,6 +13,7 @@ import type {
   EmailAddress,
   EmailAttachment,
   ListMessagesOptions,
+  ListFoldersOptions,
   SearchOptions,
   SendMessageInput,
   ListEventsOptions,
@@ -110,18 +112,57 @@ export class MicrosoftProvider implements IMailProvider, ICalendarProvider, ICon
 
   // --- IMailProvider ---
 
-  async listFolders(): Promise<MailFolder[]> {
-    const res = await this.fetchGraph<any>('/me/mailFolders');
-    return (res.value || []).map((f: any) => ({
-      id: f.id,
-      name: f.displayName,
-      parentId: f.parentFolderId,
-      type: this.mapFolderType(f.displayName),
-      unreadCount: f.unreadItemCount || 0,
-      totalCount: 0,
-      createdAt: 0,
-      updatedAt: 0,
-    }));
+  /**
+   * Graph `mailFolder` objects carry exact per-folder `unreadItemCount` and `totalItemCount`, and
+   * both arrive in the same response as the folder itself - so counts are exact and free here,
+   * with or without `withUnreadCounts`.
+   *
+   * Fixes found while auditing:
+   *  - `totalCount` was hardcoded to 0; it now reports Graph's `totalItemCount`.
+   *  - the request ignored `@odata.nextLink`, and Graph pages this collection (default page size
+   *    is 10), so accounts with more than 10 folders silently lost folders. We now ask for
+   *    `$top=100` and follow `@odata.nextLink` (bounded at 10 pages / 1000 folders).
+   *
+   * Known remaining gap (not changed here): `/me/mailFolders` returns only top-level folders
+   * (`childFolderCount > 0` marks parents); nested children would need a second traversal.
+   */
+  async listFolders(options: ListFoldersOptions = {}): Promise<MailFolder[]> {
+    const folders: MailFolder[] = [];
+    let url: string | undefined =
+      '/me/mailFolders?$top=100&$select=id,displayName,parentFolderId,totalItemCount,unreadItemCount,childFolderCount';
+
+    for (let page = 0; url && page < 10; page++) {
+      const res = await this.fetchGraph<{ value?: any[]; '@odata.nextLink'?: string }>(url);
+      for (const f of res.value || []) {
+        if (!this.matchesFolderFilter(f.id, f.displayName, options.folderId)) continue;
+        folders.push({
+          id: f.id,
+          name: f.displayName,
+          parentId: f.parentFolderId,
+          type: this.mapFolderType(f.displayName),
+          unreadCount: typeof f.unreadItemCount === 'number' ? f.unreadItemCount : UNKNOWN_COUNT,
+          totalCount: typeof f.totalItemCount === 'number' ? f.totalItemCount : UNKNOWN_COUNT,
+          createdAt: 0,
+          updatedAt: 0,
+        });
+      }
+      url = this.graphRelativeLink(res['@odata.nextLink']);
+    }
+
+    return folders;
+  }
+
+  /** Converts an absolute Graph `@odata.nextLink` into the relative form `fetchGraph` expects. */
+  private graphRelativeLink(nextLink?: string): string | undefined {
+    if (!nextLink) return undefined;
+    const parsed = new URL(nextLink);
+    return `${parsed.pathname.replace(/^\/v1\.0/, '')}${parsed.search}`;
+  }
+
+  private matchesFolderFilter(id: string, name: string, folderId?: string): boolean {
+    if (!folderId) return true;
+    const wanted = folderId.trim().toLowerCase();
+    return String(id).toLowerCase() === wanted || String(name).toLowerCase() === wanted;
   }
 
   async listMessages(folderId: string, options: ListMessagesOptions = {}): Promise<PaginatedResult<EmailMessage>> {

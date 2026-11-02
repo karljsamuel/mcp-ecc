@@ -6,12 +6,19 @@ on:
   push:
     branches: [main, dev]
 
+# Least privilege: nothing in this workflow needs write access, and no step reads
+# a repository secret, so pull requests from forks run the full gate unchanged.
+# Keep it that way - GitHub Actions logs are readable by anyone with repo access.
 permissions:
   contents: read
 
 concurrency:
   group: pr-checks-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
 
 jobs:
   verify:
@@ -20,15 +27,31 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Check out source
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
+          # Full history: the whitespace check diffs HEAD^..HEAD.
           fetch-depth: 0
 
       - name: Set up Node.js
         uses: actions/setup-node@v7
         with:
-          node-version: 24
+          # Must satisfy the root package.json engines requirement (>=26.0.0).
+          node-version: 26
           cache: npm
+
+      - name: Verify Node.js satisfies the engines requirement
+        run: |
+          node -e '
+          const { engines } = require("./package.json");
+          const spec = (engines && engines.node) || "";
+          const required = Number((/^>=\s*(\d+)/.exec(spec.trim()) || [])[1]);
+          const current = Number(process.versions.node.split(".")[0]);
+          console.log("engines.node=" + (spec || "(unset)") + " running=" + process.versions.node);
+          if (Number.isFinite(required) && current < required) {
+            console.log("::error::Node " + process.versions.node + " violates engines.node=" + spec);
+            process.exit(1);
+          }
+          '
 
       - name: Install dependencies
         run: npm ci --legacy-peer-deps
@@ -36,8 +59,42 @@ jobs:
       - name: Build all packages
         run: npm run build
 
-      - name: Run tests
+      # Kept for coverage of the workspace build/script graph, NOT as the test
+      # gate. `npm test` -> `turbo run test` -> every package's
+      # `vitest run --passWithNoTests`, and there are currently zero *.test.*
+      # files under packages/, so this passes without executing a single test.
+      - name: Run package test scripts (currently vacuous - see tests/ step below)
         run: npm test
 
-      - name: Verify repository formatting
-        run: git diff --check HEAD^ HEAD
+      # Fail loudly if the real suites ever disappear. Node treats an unmatched
+      # glob argument as a glob matching nothing and exits 0, so without this
+      # the step below can silently become a no-op - the exact defect being
+      # fixed here. Requires both suite families to be present.
+      - name: Locate repository test suites
+        run: |
+          shopt -s nullglob
+          cjs=(tests/*.test.cjs)
+          mjs=(tests/*.test.mjs)
+          files=("${cjs[@]}" "${mjs[@]}")
+          if [ ${#cjs[@]} -eq 0 ] || [ ${#mjs[@]} -eq 0 ]; then
+            echo "::error::Expected at least one tests/*.test.cjs and one tests/*.test.mjs suite; found cjs=${#cjs[@]} mjs=${#mjs[@]}. Refusing to pass vacuously."
+            exit 1
+          fi
+          printf 'Discovered %d test file(s):\n' "${#files[@]}"
+          printf '  %s\n' "${files[@]}"
+
+      # Substantive gate. These suites read built output (e.g.
+      # packages/storage/sqlite/dist/crypto.js and the workspace-linked
+      # @mcp-ecc/storage-* packages), so they must run after `npm run build`.
+      - name: Run repository test suites
+        timeout-minutes: 10
+        run: node --test tests/*.test.cjs tests/*.test.mjs
+
+      - name: Verify repository formatting (whitespace)
+        run: |
+          if git rev-parse --verify -q HEAD^ >/dev/null 2>&1; then
+            git diff --check HEAD^ HEAD
+          else
+            echo "No parent commit available; checking the full tree instead."
+            git diff --check "$(git hash-object -t tree /dev/null)" HEAD
+          fi

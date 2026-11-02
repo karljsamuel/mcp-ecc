@@ -8,20 +8,76 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { readFileSync, existsSync } from 'fs';
 import type { StorageAdapter, ProviderName, OAuthClient, User } from '@mcp-ecc/core';
-import { OAuthManager, AuthService, generateSlug } from '@mcp-ecc/core';
+import {
+  AuthService,
+  OAuthManager,
+  applySetup,
+  checkConfig,
+  containerNeedsEnvHandoff,
+  defaultStorageFile,
+  generateSessionSecret,
+  generateSlug,
+  getEncryptionKey,
+  isLoopbackAddress,
+  isRunningInContainer,
+  resolveEnvPath,
+  resolveSessionSecret,
+  sanitizeForLog,
+  SETUP_DEFAULT_HOST,
+  SETUP_DEFAULT_PORT,
+  SETUP_MODE_HOST,
+  SETUP_STEPS,
+  SetupError,
+  SetupValidationError,
+  timingSafeEqualString,
+  validateSetupStep,
+  verifySetupDatabase,
+  type DBConnectionProbe,
+  type ResolvedSetupConfig,
+  type SetupAnswers,
+  type SetupD1Config,
+  type SetupStepId,
+} from '@mcp-ecc/core';
 import { McpEccServer } from '@mcp-ecc/mcp-server';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
+/** Everything the wizard needs while no storage adapter exists yet. */
+export interface SetupModeConfig {
+  /** One-time token required by every /api/setup/* request. Never echoed back. */
+  token: string;
+  /** Env file the wizard writes. Defaults to core's resolveEnvPath(). */
+  envPath?: string;
+  /** Provider defaults offered by the wizard. */
+  defaultAnswers?: SetupAnswers;
+  /**
+   * Relax the loopback restriction. Required in containers: Docker forwards the
+   * published port to the container's eth0, so setup requests arrive from the
+   * bridge gateway, never from loopback. Isolation then rests on publishing the
+   * host port on 127.0.0.1 plus the one-time token.
+   */
+  allowNonLoopback?: boolean;
+}
+
 export interface ManagementApiConfig {
-  storage: StorageAdapter;
+  /**
+   * Storage adapter. Omitted only in setup mode, where the wizard constructs it
+   * via createStorage() once the operator has chosen a database.
+   */
+  storage?: StorageAdapter;
   port: number;
   host: string;
   publicDir: string;
   publicUrl?: string;
   sessionSecret?: string;
+  /** Build storage during setup (required whenever `setup` is set). */
+  createStorage?: (cfg: ResolvedSetupConfig) => StorageAdapter | Promise<StorageAdapter>;
+  /** Raw D1 probe factory used by the connection-verification step. */
+  createD1Probe?: (cfg: SetupD1Config) => DBConnectionProbe;
+  /** Present only when the process started without a usable configuration. */
+  setup?: SetupModeConfig;
 }
 
 const SESSION_COOKIE = 'mcp_ecc_session';
@@ -39,22 +95,34 @@ function publicClient(c: OAuthClient) {
 
 export class ManagementApi {
   private app: ReturnType<typeof Fastify>;
-  private storage: StorageAdapter;
-  private oauthManager: OAuthManager;
-  private authService: AuthService;
+  /**
+   * Storage is absent only while the process runs in setup mode. Every /api
+   * route is hard-blocked in that state (onRequest hook -> 503, auth gate ->
+   * 503), so the definite-assignment assertion below holds at runtime.
+   */
+  private storage!: StorageAdapter;
+  private oauthManager!: OAuthManager;
+  private authService!: AuthService;
   private config: ManagementApiConfig;
   private publicUrl: string;
   private healthTimer?: ReturnType<typeof setInterval>;
+  private setupCompleted = false;
+  private storageName = 'sqlite';
 
   constructor(config: ManagementApiConfig) {
     this.config = config;
-    this.storage = config.storage;
-    this.oauthManager = new OAuthManager(config.storage);
-    this.authService = new AuthService(config.storage);
+    if (config.storage) {
+      this.installStorage(config.storage, false);
+    }
     this.publicUrl = config.publicUrl || process.env.PUBLIC_URL || `http://localhost:${config.port}`;
+    if (config.storage) {
+      this.storageName = (process.env.MCP_DB_PROVIDER || '').trim() === 'd1' ? 'cloudflare-d1' : 'sqlite';
+    }
     this.app = Fastify({ logger: true });
     this.app.setErrorHandler((error: any, request: any, reply: any) => {
-      this.app.log.error({ error, body: request.body }, 'unhandled error');
+      // Request bodies can carry the admin password, the setup token and the
+      // master key: sanitize before they reach the log.
+      this.app.log.error({ error, body: sanitizeForLog(request.body) }, 'unhandled error');
       if (!reply.sent) {
         reply.code(error?.statusCode || 500).send({ error: error?.message || String(error) });
       }
@@ -64,15 +132,70 @@ export class ManagementApi {
     this.setupMcpEndpoint();
   }
 
+  /** Attach a storage adapter (normal boot, or the end of the setup wizard). */
+  installStorage(storage: StorageAdapter, complete = true): void {
+    this.storage = storage;
+    this.oauthManager = new OAuthManager(storage);
+    this.authService = new AuthService(storage);
+    if (complete) this.setupCompleted = true;
+  }
+
+  /** True while the API serves only the UI and /api/setup/*. */
+  get inSetupMode(): boolean {
+    return !this.storage;
+  }
+
+  private get setupConfig(): SetupModeConfig | undefined {
+    return this.config.setup;
+  }
+
   private setupPlugins(): void {
     const origin = this.config.publicUrl ? [this.config.publicUrl] : true;
     this.app.register(cors, { origin, credentials: true });
     this.app.register(websocket);
-    // Sign the session cookie with the configured secret, else derive from encryption key.
-    const secret = this.config.sessionSecret || process.env.SESSION_SECRET || process.env.MCP_ENCRYPTION_KEY || 'insecure-default';
-    this.app.register(cookies, { secret });
+
+    // Session cookies are signed with SESSION_SECRET — never with the master
+    // encryption key, and never with a hardcoded constant.
+    //  - configured secret              -> use it
+    //  - setup mode                     -> throwaway secret (the wizard writes a
+    //                                      fresh SESSION_SECRET into .env; no
+    //                                      session can exist before an admin does)
+    //  - otherwise missing              -> generate one and persist it
+    const resolved = this.config.sessionSecret
+      ? { secret: this.config.sessionSecret, source: 'env' as const }
+      : this.config.setup
+        ? { secret: generateSessionSecret(), source: 'setup-mode' as const }
+        // No setup config and no SESSION_SECRET: generate and persist one.
+        : resolveSessionSecret();
+    if (resolved.source === 'generated') {
+      this.app.log.warn('SESSION_SECRET was missing; generated one and stored it in the env file.');
+    } else if (resolved.source === 'ephemeral') {
+      this.app.log.warn('SESSION_SECRET was missing and could not be persisted; sessions will not survive a restart.');
+    }
+    this.app.register(cookies, { secret: resolved.secret });
+
     // Serve the admin UI (SPA). Guard against a missing build dir.
     this.app.register(staticFiles, { root: this.config.publicDir, prefix: '/' });
+
+    // Setup mode: the public UI and /api/setup/* only. Anything else is 503,
+    // so the SPA (and every API client) learns that setup is required.
+    if (this.setupConfig) {
+      this.app.addHook('onRequest', async (request: any, reply: any) => {
+        if (this.setupCompleted) return;
+        const path = String(request.raw.url || '').split('?')[0];
+        // Liveness stays 200 so orchestrators do not restart the container.
+        if (path === '/health') return;
+        if (path.startsWith('/api/setup/')) return;
+        if (path.startsWith('/api/') || path.startsWith('/oauth/') || path.startsWith('/mcp') || path.startsWith('/ws')) {
+          return reply.code(503).send({
+            error: 'Setup required',
+            needsSetup: true,
+            message: 'This instance is not configured yet. Open the setup page to choose a database and write .env.',
+            setupUrl: '/setup',
+          });
+        }
+      });
+    }
   }
 
   private async refreshAccountHealth(): Promise<void> {
@@ -87,31 +210,49 @@ export class ManagementApi {
     }
   }
 
+  /**
+   * Cheapest per-provider liveness probe.
+   *
+   * The 5-minute health timer runs this for every account, so it must be one
+   * bounded operation. Probing ONE basic folder (the provider's primary folder)
+   * with `limit: 1` replaces the previous `listFolders()` call: folder listing
+   * now measures per-folder unread counts and, for IMAP/Zoho, walks every folder
+   * (Zoho bounds a scan at 2000 messages/folder, 20s wall clock).
+   *
+   * Per provider:
+   *  - google    : messages.list(label:INBOX, maxResults 1) + one message.get
+   *  - microsoft : one Graph request ($top=1, well-known folder name)
+   *  - zoho      : account + folder resolution + one messages/view page
+   *  - imap/smtp : connect, open INBOX, one search
+   *  - caldav    : one PROPFIND (listCalendars)
+   *  - carddav    : probe() — discovers address books without fetching vCards.
+   */
   private async checkAccountConnection(account: any): Promise<string> {
     const credentials = account.credentials || {};
     switch (account.provider) {
       case 'google': {
         const { GoogleProvider } = await import('@mcp-ecc/provider-google');
         const provider = new GoogleProvider(account.id, credentials);
-        await provider.listFolders();
+        await provider.listMessages('INBOX', { limit: 1 });
         return 'Google Gmail connection succeeded.';
       }
       case 'microsoft': {
         const { MicrosoftProvider } = await import('@mcp-ecc/provider-microsoft');
         const provider = new MicrosoftProvider(account.id, credentials);
-        await provider.listFolders();
+        await provider.listMessages('inbox', { limit: 1 });
         return 'Microsoft Graph connection succeeded.';
       }
       case 'zoho': {
         const { ZohoProvider } = await import('@mcp-ecc/provider-zoho');
         const provider = new ZohoProvider(account.id, credentials);
-        await provider.listFolders();
+        await provider.listMessages('INBOX', { limit: 1 });
         return 'Zoho Mail connection succeeded.';
       }
-      case 'imap': {
+      case 'imap':
+      case 'smtp': {
         const { ImapSmtpProvider } = await import('@mcp-ecc/provider-imap-smtp');
         const provider = new ImapSmtpProvider(account.id, credentials);
-        await provider.listFolders();
+        await provider.listMessages('INBOX', { limit: 1 });
         return 'IMAP connection succeeded.';
       }
       case 'caldav': {
@@ -123,7 +264,7 @@ export class ManagementApi {
       case 'carddav': {
         const { CardDAVProvider } = await import('@mcp-ecc/provider-carddav');
         const provider = new CardDAVProvider(account.id, credentials);
-        await provider.listContacts({ limit: 1 });
+        await provider.probe();
         return 'CardDAV connection succeeded.';
       }
       default:
@@ -133,21 +274,143 @@ export class ManagementApi {
 
   private setupRoutes(): void {
     // --- Health (public) ---
-    this.app.get('/health', async () => ({ status: 'ok', timestamp: Date.now() }));
+    // Stays 200 while unconfigured so an orchestrator does not restart-loop the
+    // container; the status field says what is wrong.
+    this.app.get('/health', async () => ({
+      status: this.inSetupMode ? 'setup_required' : 'ok',
+      setupRequired: this.inSetupMode,
+      timestamp: Date.now(),
+    }));
 
     // --- Public info (no auth): expose redirect URI + MCP endpoint for the UI ---
     this.app.get('/api/info', async () => ({
       publicUrl: this.publicUrl,
       oauthRedirectUri: `${this.publicUrl}/oauth/callback`,
       mcpEndpoint: `${this.publicUrl}/mcp`,
-      storage: { provider: process.env.MCP_DB_PROVIDER || 'sqlite' },
+      storage: { provider: process.env.MCP_DB_PROVIDER || 'sqlite', adapter: this.storageName },
     }));
 
     // --- Public bootstrap status (no auth): used to show the 'create admin' screen ---
     this.app.get('/api/bootstrap-status', async () => {
+      if (this.inSetupMode) return { needsBootstrap: false, needsSetup: true };
       const count = await this.storage.countUsers();
-      return { needsBootstrap: count === 0 };
+      return { needsBootstrap: count === 0, needsSetup: false };
     });
+
+    // --- First-run setup -------------------------------------------------
+    // Registered only when the process started without a usable configuration
+    // (bin.ts sets `setup`). Three-way guard on every request:
+    //   1. no user accounts may exist yet (409 once they do),
+    //   2. the one-time token from stdout, compared in constant time, and
+    //   3. loopback clients only.
+    if (this.setupConfig) {
+      this.app.get('/api/setup/state', async (request: any, reply: any) => {
+        if (!(await this.guardSetupRequest(request, reply))) return reply;
+        reply.header('Cache-Control', 'no-store');
+        const config = checkConfig();
+        const defaults = this.setupDefaults();
+        return {
+          needsSetup: true,
+          steps: SETUP_STEPS,
+          bindHost: this.config.host,
+          envPath: this.setupConfig?.envPath || resolveEnvPath(),
+          inContainer: isRunningInContainer(),
+          handoff: containerNeedsEnvHandoff(),
+          defaults,
+          current: {
+            dbProvider: (process.env.MCP_DB_PROVIDER || '').trim(),
+            hasEncryptionKey: !!getEncryptionKey(),
+            hasSessionSecret: !!process.env.SESSION_SECRET,
+          },
+          // Variable NAMES that are still missing — never their values.
+          configIssues: config.missing,
+          usersExist: await this.countExistingUsers(),
+        };
+      });
+
+      this.app.post('/api/setup/step', async (request: any, reply: any) => {
+        if (!(await this.guardSetupRequest(request, reply))) return reply;
+        reply.header('Cache-Control', 'no-store');
+
+        const body = (request.body || {}) as { step?: unknown; answers?: SetupAnswers };
+        const step = String(body.step || '');
+        if (!(SETUP_STEPS as readonly string[]).includes(step)) {
+          return reply.code(400).send({ error: `Unknown setup step: ${step}` });
+        }
+        const stepId = step as SetupStepId;
+        const answers: SetupAnswers = { ...(this.setupConfig?.defaultAnswers || {}), ...(body.answers || {}) };
+
+        try {
+          // Verification is an action, not a validation: run it for real.
+          if (stepId === 'verify-connection') {
+            const result = await verifySetupDatabase(answers, { createD1Probe: this.config.createD1Probe });
+            return { step: stepId, ok: result.success, error: result.error, provider: result.provider, retryable: true };
+          }
+
+          if (stepId !== 'apply') {
+            const validation = validateSetupStep(stepId, answers);
+            return { step: stepId, ok: validation.valid, errors: validation.errors };
+          }
+
+          if (!this.config.createStorage) {
+            return reply.code(500).send({ error: 'Setup is not wired to a storage factory on this instance.' });
+          }
+
+          // A container that cannot persist .env gets the copy-paste handoff
+          // instead of a file write that a recreate would discard.
+          const handoff = containerNeedsEnvHandoff();
+          const result = await applySetup(answers, {
+            createStorage: this.config.createStorage,
+            createD1Probe: this.config.createD1Probe,
+            envPath: this.setupConfig?.envPath,
+            writeEnv: !handoff,
+            returnEnvContent: handoff,
+          });
+
+          if (!result.handoff && result.envWritten) {
+            this.installStorage(result.storage);
+            // The process is now configured: start the periodic account checks
+            // without waiting for a restart.
+            this.startHealthLoop();
+          }
+
+          const warning = result.usersExisted
+            ? `This database already contains user accounts, so no admin was created.${result.encryptionKeyGenerated ? ' A NEW MCP_ENCRYPTION_KEY was generated: credentials stored with the previous key can no longer be decrypted. Restore the original key before using these accounts.' : ''}`
+            : undefined;
+
+          return {
+            step: stepId,
+            ok: true,
+            dbProvider: result.dbProvider,
+            envPath: result.envPath,
+            envWritten: result.envWritten,
+            handoff: result.handoff,
+            handoffInstructions: result.handoffInstructions,
+            // Present only for the container handoff, so the operator can copy
+            // it. Never logged, never rendered.
+            envContent: result.envContent,
+            adminCreated: result.adminCreated ? { username: result.adminCreated.username } : undefined,
+            usersExisted: result.usersExisted,
+            warning,
+            encryptionKeyGenerated: result.encryptionKeyGenerated,
+            sessionSecretGenerated: result.sessionSecretGenerated,
+            requiresRestart: true,
+            restartReason: result.handoff
+              ? 'Paste the copied configuration into your compose-folder .env and recreate the container.'
+              : `Restart the service so it binds ${answers.host || SETUP_DEFAULT_HOST} and starts the account health checks.`,
+            nextSteps: result.nextSteps,
+          };
+        } catch (error) {
+          if (error instanceof SetupValidationError) {
+            return reply.code(400).send({ error: error.message, errors: error.errors });
+          }
+          if (error instanceof SetupError) {
+            return reply.code(400).send({ error: error.message, detail: error.detail });
+          }
+          return reply.code(500).send({ error: error instanceof Error ? error.message : String(error) });
+        }
+      });
+    }
 
     // --- Auth: sessions are persisted in the settings table so logins survive restarts ---
     type SessionRecord = { token: string; userId: string; createdAt: number };
@@ -228,15 +491,24 @@ export class ManagementApi {
 
     // --- Auth gate for everything else under /api ---
     this.app.addHook('preHandler', async (request: any, reply: any) => {
-      const url = request.raw.url || '';
-      const isPublic = url.startsWith('/health')
+      const url = String(request.raw.url || '').split('?')[0];
+      const isPublic = url === '/health'
         || url === '/api/info'
         || url === '/api/bootstrap-status'
         || url === '/api/auth/login'
         || url === '/api/auth/bootstrap'
         || url === '/api/auth/logout'
+        // Setup endpoints carry their own one-time-token + loopback guard.
+        || url === '/api/setup/state'
+        || url === '/api/setup/step'
         || !url.startsWith('/api/');
       if (isPublic) return;
+      // No adapter yet: setup mode. The onRequest hook answers non-setup API
+      // routes with 503; this is the belt-and-braces path for anything that
+      // slips past it.
+      if (!this.storage) {
+        return reply.code(503).send({ error: 'Setup required', needsSetup: true });
+      }
       const user = await currentUser(request);
       if (!user) return reply.code(401).send({ error: 'Unauthorized' });
       request.user = user;
@@ -612,6 +884,74 @@ this.app.get('/api/users', async (request: any, reply: any) => {
     });
   }
 
+  // --- Setup-mode helpers --------------------------------------------------
+
+  /** Defaults offered by the wizard (values already in the environment win). */
+  private setupDefaults(): {
+    dbProvider: string;
+    storageFile: string;
+    port: string;
+    host: string;
+    publicUrl: string;
+  } {
+    const port = (process.env.PORT || '').trim() || SETUP_DEFAULT_PORT;
+    return {
+      dbProvider: (process.env.MCP_DB_PROVIDER || '').trim() || 'sqlite',
+      storageFile: (process.env.MCP_STORAGE_FILE || '').trim() || defaultStorageFile(),
+      port,
+      host: (process.env.HOST || '').trim() || SETUP_DEFAULT_HOST,
+      publicUrl: (process.env.PUBLIC_URL || '').trim() || `http://localhost:${port}`,
+    };
+  }
+
+  /**
+   * How many users the database has, or null when no adapter is reachable yet.
+   * Used to refuse setup on an instance that already has accounts.
+   */
+  private async countExistingUsers(): Promise<number | null> {
+    if (!this.storage) return null;
+    try {
+      return await this.storage.countUsers();
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Guard for /api/setup/*: (1) no admin may exist, (2) one-time token in
+   * constant time, (3) loopback caller only.
+   *
+   * The token is never echoed in a response and never logged.
+   */
+  private async guardSetupRequest(request: any, reply: any): Promise<boolean> {
+    const setup = this.setupConfig;
+    if (!setup) {
+      reply.code(404).send({ error: 'Setup is not available on this instance' });
+      return false;
+    }
+    if (this.setupCompleted) {
+      reply.code(409).send({ error: 'Setup has already been completed on this instance' });
+      return false;
+    }
+    if (!setup.allowNonLoopback && !isLoopbackAddress(request.ip)) {
+      reply.code(403).send({ error: 'Setup is only reachable from localhost' });
+      return false;
+    }
+    const provided = String(request.headers?.['x-setup-token'] || '');
+    if (!provided || !timingSafeEqualString(provided, setup.token)) {
+      reply.code(401).send({ error: 'Invalid or missing setup token' });
+      return false;
+    }
+    const users = await this.countExistingUsers();
+    if (users !== null && users > 0) {
+      reply.code(409).send({
+        error: 'Setup is not allowed: this database already contains user accounts. Repair the existing configuration instead of re-running setup.',
+      });
+      return false;
+    }
+    return true;
+  }
+
   private async countAdmins(): Promise<number> {
     const users = await this.storage.listUsers();
     return users.filter((u) => u.role === 'admin').length;
@@ -676,11 +1016,23 @@ this.app.get('/api/users', async (request: any, reply: any) => {
 
   async start(): Promise<void> {
     await this.app.listen({ port: this.config.port, host: this.config.host });
-    // Check persisted accounts once at startup and periodically thereafter.
+    if (this.inSetupMode) {
+      // No storage, no health checks: the wizard owns the process for now.
+      this.app.log.warn(
+        `mcp-ecc is unconfigured and running in SETUP MODE on ${this.config.host}:${this.config.port}. Open http://${SETUP_MODE_HOST}:${this.config.port}/setup`,
+      );
+      return;
+    }
+    this.startHealthLoop();
+    console.log(`mcp-ecc management API listening on http://${this.config.host}:${this.config.port}`);
+  }
+
+  /** Check persisted accounts once at startup and every 5 minutes thereafter. */
+  private startHealthLoop(): void {
+    if (this.healthTimer || this.inSetupMode) return;
     void this.refreshAccountHealth();
     this.healthTimer = setInterval(() => void this.refreshAccountHealth(), 5 * 60 * 1000);
     this.healthTimer.unref?.();
-    console.log(`mcp-ecc management API listening on http://${this.config.host}:${this.config.port}`);
   }
 
   async stop(): Promise<void> {

@@ -5,6 +5,7 @@ import { ToastContainer, type ToastMsg, type ToastTone } from './components/ui';
 import { Layout } from './components/Layout';
 import { Login } from './pages/Login';
 import { Bootstrap } from './pages/Bootstrap';
+import { Setup } from './pages/Setup';
 import { Accounts } from './pages/Accounts';
 import { Users } from './pages/Users';
 import { OAuthClients } from './pages/OAuthClients';
@@ -22,10 +23,12 @@ export function useToasts() {
 }
 
 function RequireAuth({ children }: { children: JSX.Element }) {
-  const { user, loading, needsBootstrap } = useAuth();
+  const { user, loading, needsBootstrap, needsSetup } = useAuth();
   const location = useLocation();
   if (loading) return null;
   if (!user) {
+    // Unconfigured instance: setup mode serves the UI and /api/setup/* only.
+    if (needsSetup) return <Navigate to="/setup" replace />;
     // Fresh install with no admin: go to the create-admin screen.
     if (needsBootstrap) return <Navigate to="/bootstrap" replace />;
     return <Navigate to="/login" replace state={{ from: location }} />;
@@ -57,6 +60,7 @@ function Router() {
       <Routes>
         <Route path="/login" element={<Login push={push} />} />
         <Route path="/bootstrap" element={<Bootstrap push={push} />} />
+        <Route path="/setup" element={<Setup push={push} />} />
         <Route
           path="/*"
           element={

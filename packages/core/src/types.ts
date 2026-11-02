@@ -116,13 +116,44 @@ export interface EmailAttachment {
   data?: Buffer | string; // Base64 or buffer
 }
 
+/**
+ * Sentinel for a message count that was NOT determined.
+ *
+ * Used for `MailFolder.unreadCount` (and `totalCount`) when either:
+ *  - the caller opted out of count lookups (`ListFoldersOptions.withUnreadCounts === false`), or
+ *  - the provider could not determine the count (in which case `MailFolder.unreadCountError`
+ *    carries the reason).
+ *
+ * Counts are non-negative by definition, so a negative sentinel can never collide with a real
+ * count. The value stays a `number` (never `null`/`undefined`) so every consumer, and the
+ * storage layers that persist `unreadCount`, keep working unchanged.
+ */
+export const UNKNOWN_COUNT = -1;
+
+/** True when `value` is the {@link UNKNOWN_COUNT} sentinel rather than a real count. */
+export function isUnknownCount(value: number | undefined): boolean {
+  return typeof value !== 'number' || value < 0;
+}
+
 export interface MailFolder {
   id: string;
   name: string;
   parentId?: string;
-  type: 'inbox' | 'sent' | 'drafts' | 'trash' | 'archive' | 'spam' | 'custom';
+  type: 'inbox' | 'sent' | 'drafts' | 'trash' | 'archive' | 'spam' | 'starred' | 'custom';
+  /**
+   * Exact number of unread messages in this folder, or {@link UNKNOWN_COUNT} when the count was
+   * not requested or could not be determined. Providers must never report 0 for a folder they
+   * failed to measure - 0 means "checked, and genuinely empty".
+   */
   unreadCount: number;
+  /** Total messages in the folder, or {@link UNKNOWN_COUNT} when not determined. */
   totalCount: number;
+  /**
+   * Present only when `unreadCount` is {@link UNKNOWN_COUNT} because the count could not be
+   * obtained (as opposed to the caller simply not asking for counts). This is what lets a caller
+   * tell "not requested" apart from "lookup failed".
+   */
+  unreadCountError?: string;
   createdAt: number;
   updatedAt: number;
 }
@@ -194,7 +225,7 @@ export interface PaginatedResult<T> {
 
 // Provider interfaces
 export interface IMailProvider {
-  listFolders(): Promise<MailFolder[]>;
+  listFolders(options?: ListFoldersOptions): Promise<MailFolder[]>;
   listMessages(folderId: string, options?: ListMessagesOptions): Promise<PaginatedResult<EmailMessage>>;
   getMessage(messageId: string): Promise<EmailMessage>;
   sendMessage(message: SendMessageInput): Promise<EmailMessage>;
@@ -209,6 +240,34 @@ export interface ListMessagesOptions {
   cursor?: string;
   query?: string;
   unreadOnly?: boolean;
+}
+
+/**
+ * Options for `IMailProvider.listFolders`.
+ *
+ * `withUnreadCounts` defaults to TRUE: a general folder query returns an exact per-folder unread
+ * count (this is what an agent normally wants). Callers that only need folder names - a health
+ * probe, a sync that will crawl the messages anyway - pass `false` to get a single-round-trip
+ * listing in which `unreadCount` may be {@link UNKNOWN_COUNT} instead of a measured count.
+ *
+ * Providers must never fabricate a 0 when they skipped or failed the measurement; see
+ * `MailFolder.unreadCount` / `MailFolder.unreadCountError`.
+ */
+export interface ListFoldersOptions {
+  /**
+   * When false, providers make no extra calls to determine unread counts and skip any expensive
+   * per-folder work. Counts that arrive in the same request the provider already needs (Gmail
+   * `labels.list`, Graph `mailFolders`) are still returned because they cost nothing; otherwise
+   * `unreadCount` is {@link UNKNOWN_COUNT}.
+   */
+  withUnreadCounts?: boolean;
+  /**
+   * Restrict the result to a single folder (matched by folder id, or case-insensitively by name)
+   * and determine that folder's exact unread count. This is the cheap single-folder probe: one
+   * round-trip for the folder list plus at most one count measurement. Returns an empty array
+   * when no folder matches.
+   */
+  folderId?: string;
 }
 
 export interface SearchOptions {

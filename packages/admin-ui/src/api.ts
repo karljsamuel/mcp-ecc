@@ -112,7 +112,83 @@ export interface ServerInfo {
 
 export const infoApi = {
   fetch: () => get<ServerInfo>('/api/info'),
-  bootstrapStatus: () => get<{ needsBootstrap: boolean }>('/api/bootstrap-status'),
+  bootstrapStatus: () => get<{ needsBootstrap: boolean; needsSetup?: boolean }>('/api/bootstrap-status'),
+};
+
+/* --------------------------- first-run setup ------------------------ */
+
+export interface SetupDefaults {
+  dbProvider: string;
+  storageFile: string;
+  port: string;
+  host: string;
+  publicUrl: string;
+}
+
+export interface SetupState {
+  needsSetup: boolean;
+  steps: string[];
+  bindHost: string;
+  envPath: string;
+  inContainer: boolean;
+  handoff: boolean;
+  defaults: SetupDefaults;
+  current: { dbProvider: string; hasEncryptionKey: boolean; hasSessionSecret: boolean };
+  configIssues: string[];
+  usersExist: number | null;
+}
+
+export interface SetupAnswers {
+  dbProvider?: string;
+  storageFile?: string;
+  d1?: { accountId?: string; databaseId?: string; apiToken?: string };
+  encryptionKey?: string;
+  port?: string;
+  host?: string;
+  publicUrl?: string;
+  sessionSecret?: string;
+  admin?: { username?: string; password?: string; displayName?: string };
+}
+
+export interface SetupStepResult {
+  step: string;
+  ok: boolean;
+  errors?: string[];
+  error?: string;
+  detail?: string;
+  provider?: string;
+  retryable?: boolean;
+  // apply result
+  dbProvider?: string;
+  envPath?: string;
+  envWritten?: boolean;
+  handoff?: boolean;
+  handoffInstructions?: string[];
+  /** Container handoff only: copied to the clipboard, never rendered. */
+  envContent?: string;
+  adminCreated?: { username: string };
+  usersExisted?: boolean;
+  warning?: string;
+  encryptionKeyGenerated?: boolean;
+  sessionSecretGenerated?: boolean;
+  requiresRestart?: boolean;
+  restartReason?: string;
+  nextSteps?: string[];
+}
+
+/**
+ * Setup endpoints live behind a one-time token (sent as a header, never in the
+ * URL) and are only reachable from localhost while the instance is unconfigured.
+ */
+export const setupApi = {
+  state: (token: string) =>
+    request<SetupState>('/api/setup/state', { method: 'GET', headers: { 'X-Setup-Token': token } }),
+  step: (token: string, step: string, answers: SetupAnswers) =>
+    request<SetupStepResult>('/api/setup/step', {
+      method: 'POST',
+      headers: { 'X-Setup-Token': token },
+      body: JSON.stringify({ step, answers }),
+    }),
 };
 
 /* ------------------------------ accounts ----------------------------- */

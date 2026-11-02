@@ -7,7 +7,7 @@
 #
 # .dockerignore excludes node_modules/dist/.git so the workspace copies cleanly.
 
-FROM node:24-alpine AS builder
+FROM node:26-alpine AS builder
 WORKDIR /app
 RUN apk upgrade --no-cache && apk add --no-cache python3 make g++ && npm install -g turbo
 
@@ -15,12 +15,15 @@ RUN apk upgrade --no-cache && apk add --no-cache python3 make g++ && npm install
 COPY package.json package-lock.json turbo.json ./
 COPY packages/ ./packages/
 
-# Install all workspace dependencies and compile
+# Install all workspace dependencies and compile.
+# Clean first: `composite`/`incremental` builds trust .tsbuildinfo, so a stale
+# one arriving in the build context without its dist/ makes tsc emit nothing and
+# silently produce an empty package.
 RUN npm ci --legacy-peer-deps
-RUN npx turbo run build
+RUN npm run clean && npm run build
 
 # --- runner: minimal image, production deps only ---
-FROM node:24-alpine AS runner
+FROM node:26-alpine AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production
