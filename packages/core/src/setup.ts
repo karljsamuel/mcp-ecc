@@ -17,7 +17,7 @@
  */
 
 import { createHash, randomBytes, timingSafeEqual } from 'crypto';
-import { appendFileSync, mkdirSync } from 'fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'fs';
 import { dirname, resolve as resolvePath } from 'path';
 import {
   ENCRYPTION_KEY_VAR,
@@ -185,6 +185,43 @@ export function setupModeHost(): string {
 
 export function defaultStorageFile(cwd: string = process.cwd()): string {
   return resolvePath(cwd, 'data', 'mcp-ecc.db');
+}
+
+const ENV_ASSIGNMENT = /^([A-Za-z_][A-Za-z0-9_]*)=/;
+
+/**
+ * Merges freshly generated `.env` content into an existing file instead of
+ * replacing it.
+ *
+ * Setup can legitimately run against a directory that already holds a `.env` —
+ * a partial one (say, no MCP_ENCRYPTION_KEY) leaves the process unconfigured, so
+ * the wizard is reachable again. Overwriting wholesale would silently discard
+ * anything the wizard does not itself manage: a custom HOST, MCP_ENV_FILE, extra
+ * provider settings. Those are preserved here; variables the wizard does emit
+ * always win.
+ */
+export function mergeEnvContent(existing: string, incoming: string): string {
+  const managed = new Set<string>();
+  for (const line of incoming.split('\n')) {
+    const match = ENV_ASSIGNMENT.exec(line);
+    if (match) managed.add(match[1]);
+  }
+
+  const preserved: string[] = [];
+  for (const line of existing.split('\n')) {
+    const match = ENV_ASSIGNMENT.exec(line);
+    if (!match) continue; // drop stale comments and blank lines
+    if (managed.has(match[1])) continue; // the wizard's value wins
+    preserved.push(line.replace(/\r$/, ''));
+  }
+
+  if (preserved.length === 0) return incoming;
+  return (
+    incoming.trimEnd() +
+    '\n\n# --- preserved from the existing file (not managed by setup) ---\n' +
+    preserved.join('\n') +
+    '\n'
+  );
 }
 
 // --- Primitives ------------------------------------------------------------
@@ -547,11 +584,29 @@ export async function applySetup(answers: SetupAnswers, deps: SetupDeps): Promis
   const wantHandoff = deps.returnEnvContent !== undefined ? deps.returnEnvContent : container && cfg.handoff;
   const writeEnv = deps.writeEnv !== undefined ? deps.writeEnv : !wantHandoff;
 
+  // Never replace an existing .env wholesale. Setup legitimately re-runs against a
+  // partial .env (which leaves the process unconfigured), so preserve any variable
+  // the wizard does not itself manage. Both the written file and the handoff
+  // content use the merged result.
+  let finalEnvContent = cfg.envContent;
+  if (existsSync(cfg.envPath)) {
+    let existing: string;
+    try {
+      existing = readFileSync(cfg.envPath, 'utf8');
+    } catch (error) {
+      throw new SetupError(
+        `Could not read the existing ${cfg.envPath}`,
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+    finalEnvContent = mergeEnvContent(existing, cfg.envContent);
+  }
+
   let envWritten = false;
   if (writeEnv) {
     try {
       mkdirSync(dirname(cfg.envPath), { recursive: true });
-      writeEnvFile(cfg.envPath, cfg.envContent);
+      writeEnvFile(cfg.envPath, finalEnvContent);
       envWritten = true;
     } catch (error) {
       throw new SetupError(
@@ -630,7 +685,7 @@ export async function applySetup(answers: SetupAnswers, deps: SetupDeps): Promis
     envWritten,
     handoff: wantHandoff,
     handoffInstructions: wantHandoff ? handoffInstructions({ dbProvider: cfg.dbProvider, envPath: cfg.envPath }) : undefined,
-    envContent: wantHandoff ? cfg.envContent : undefined,
+    envContent: wantHandoff ? finalEnvContent : undefined,
     encryptionKeyGenerated: cfg.encryptionKeyGenerated,
     sessionSecretGenerated: cfg.sessionSecretGenerated,
     storage,

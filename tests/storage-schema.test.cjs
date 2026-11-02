@@ -248,6 +248,33 @@ for (const backend of ['sqlite', 'd1']) {
     await assert.rejects(stale.getAccount('acct-1'), /could not be decrypted/);
   });
 
+  test(`${backend}: rotation also re-encrypts rows whose generation is higher than the current one`, async t => {
+    const { open } = database(t, backend);
+    const account = { id: 'acct-hi', ownerId: 'owner-hi', provider: 'google', name: 'H', slug: 'h', email: 'h@example.com', credentials: { accessToken: 'token-hi', refreshToken: 'refresh-hi' }, status: 'active', health: 'unknown', createdAt: 1, updatedAt: 1 };
+
+    // Author the row on generation 2.
+    const generationTwo = open('key-two', {}, 2);
+    await generationTwo.initSchema();
+    await generationTwo.saveUser({ id: 'owner-hi', username: 'owner-hi', displayName: 'Hi', passwordHash: 'hash', role: 'admin', mcpApiKey: 'api-key-hi', createdAt: 1, updatedAt: 1 });
+    await generationTwo.saveAccount(account);
+
+    // The operator then runs with generation 1 as current (misconfigured generation
+    // number, restored old .env, or a dropped-and-recreated keyring). Generation 2
+    // is retired so the row is still readable.
+    const backwards = open('key-one', { 2: 'key-two' }, 1);
+    await backwards.initSchema();
+    assert.equal(backwards.encryptionKeyGeneration, 1);
+    assert.equal((await backwards.getAccount('acct-hi')).credentials.refreshToken, 'refresh-hi', 'generation-2 row readable while its key is retired');
+
+    // A `<` predicate would silently skip this row; `<>` brings it onto generation 1.
+    assert.ok(await backwards.rotateEncryptionKeys() >= 1, 'the higher-generation row must be rewritten');
+
+    // Now drop the generation-2 key entirely: the row only survives if it really moved.
+    const withoutRetired = open('key-one', {}, 1);
+    await withoutRetired.initSchema();
+    assert.equal((await withoutRetired.getAccount('acct-hi')).credentials.refreshToken, 'refresh-hi', 'row is now encrypted under generation 1');
+  });
+
   test(`${backend}: a corrupt blob errors naming the record instead of blanking it`, async t => {
     const { db, open } = database(t, backend);
     const storage = open();

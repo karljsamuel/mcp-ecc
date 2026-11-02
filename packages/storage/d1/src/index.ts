@@ -406,7 +406,7 @@ export class D1Storage implements StorageAdapter {
       for (;;) {
         const { results } = await this.db.prepare(
           `SELECT id AS id, ${column.owner} AS owner, ${column.cipher} AS cipher, ${column.generation} AS generation
-           FROM ${column.table} WHERE ${column.generation} < ? ORDER BY id LIMIT ?`,
+           FROM ${column.table} WHERE ${column.generation} <> ? ORDER BY id LIMIT ?`,
         ).bind(target, batchSize).all<any>();
         if (!results || results.length === 0) break;
         let progressed = 0;

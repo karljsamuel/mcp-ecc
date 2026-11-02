@@ -65,6 +65,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Re-running setup no longer replaces an existing `.env`.** A partial `.env`
+  leaves the process unconfigured, so the wizard is legitimately reachable again —
+  and it previously overwrote the file wholesale, silently discarding any variable
+  it does not itself manage (a custom `HOST`, `MCP_ENV_FILE`, extra provider
+  settings). Those are now preserved, with the wizard's values winning for the keys
+  it emits.
+- **The generated `.env` is always mode `600`.** `writeFileSync`'s `mode` option
+  only applies when the file is created, so writing into a pre-existing `.env` left
+  it with its original permissions — leaving the encryption key and session secret
+  readable by other local users. The mode is now enforced unconditionally.
+- **Key rotation rewrites every row not already on the current generation.** The
+  predicate was `generation < current`, so a row carrying a *higher* generation —
+  after a restored old `.env` or a mis-set `MCP_ENCRYPTION_KEY_GENERATION` — was
+  skipped and would later fail to decrypt. It is now `<>`, and both backends have a
+  regression test covering the backwards case.
+- **D1 decryption reports malformed base64 as `EncryptionError`.** `atob` is strict
+  where Node's `Buffer.from` is lenient, so a corrupt blob escaped the documented
+  error contract as a raw `DOMException`.
 - **Folder unread counts are now exact and per-folder.**
   - Google: the redundant extra `messages.list` probe is gone, and counts for
     every label come from the single `labels.list` response. System folders

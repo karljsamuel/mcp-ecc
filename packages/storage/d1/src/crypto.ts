@@ -42,7 +42,14 @@ export class EncryptionError extends Error {
 }
 
 function decodeBase64(value: string): Uint8Array {
-  return Uint8Array.from(atob(value), character => character.charCodeAt(0));
+  try {
+    return Uint8Array.from(atob(value), character => character.charCodeAt(0));
+  } catch (error) {
+    // atob is strict about invalid base64 (unlike Node's lenient Buffer.from), so
+    // surface the failure as EncryptionError rather than letting a raw DOMException
+    // escape the documented error contract.
+    throw new EncryptionError('ciphertext is not valid base64', { cause: error });
+  }
 }
 
 function encodeBase64(value: Uint8Array): string {

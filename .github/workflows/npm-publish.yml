@@ -79,6 +79,10 @@ jobs:
         run: node scripts/rewrite-file-deps.mjs
 
       - name: Publish internal @mcp-ecc packages
+        # The tag travels via env, never interpolated into the shell text, so a
+        # step output can't become part of the command line.
+        env:
+          NPM_TAG: ${{ steps.version.outputs.npm_tag }}
         run: |
           set -e
           for pkg in \
@@ -94,8 +98,10 @@ jobs:
             packages/mcp-server \
             packages/management-api; do
             echo "publishing $pkg"
-            npm publish "./$pkg" --access public --provenance --tag "${{ steps.version.outputs.npm_tag }}"
+            npm publish "./$pkg" --access public --provenance --tag "$NPM_TAG"
           done
 
       - name: Publish entry package
-        run: npm publish ./packages/cli --access public --provenance --tag "${{ steps.version.outputs.npm_tag }}"
+        env:
+          NPM_TAG: ${{ steps.version.outputs.npm_tag }}
+        run: npm publish ./packages/cli --access public --provenance --tag "$NPM_TAG"

@@ -1,6 +1,6 @@
 import { config } from 'dotenv';
 import { resolve, join, dirname } from 'path';
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, unlinkSync, writeFileSync } from 'fs';
+import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, unlinkSync, writeFileSync } from 'fs';
 import { randomBytes } from 'crypto';
 
 // Resolve .env path respecting MCP_ENV_FILE or cwd.
@@ -243,4 +243,8 @@ export function buildEnvContent(cfg: EnvConfig): string {
 
 export function writeEnvFile(envPath: string, content: string): void {
   writeFileSync(envPath, content, { mode: 0o600 });
+  // The `mode` option only applies when the file is *created*. An existing .env
+  // keeps whatever permissions it had, which would leave the encryption key and
+  // session secret readable by other local users. Enforce it unconditionally.
+  chmodSync(envPath, 0o600);
 }

@@ -212,7 +212,7 @@ export class SQLiteStorage implements StorageAdapter {
         for (;;) {
           const rows = this.db.prepare(
             `SELECT id AS id, ${column.owner} AS owner, ${column.cipher} AS cipher, ${column.generation} AS generation
-             FROM ${column.table} WHERE ${column.generation} < ? ORDER BY id LIMIT ?`,
+             FROM ${column.table} WHERE ${column.generation} <> ? ORDER BY id LIMIT ?`,
           ).all(target, batchSize) as any[];
           if (rows.length === 0) break;
           let progressed = 0;
