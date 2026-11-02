@@ -104,27 +104,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   build as a failing gate, and fails loudly if either suite family disappears —
   `node --test` treats an unmatched glob as a passing no-op.
 
-### Known issues
+### Dependency overrides
 
-- `npm audit --omit=dev` reports **3 moderate advisories** in the production tree:
-  `glob` < 14.0.2 and `minimatch` < 11.0.1, both reached through
-  `@fastify/static`. They cannot be resolved from this repository.
-  `@fastify/static` declares `glob: ^13` and `eslint` declares `minimatch: ^10.2.5`,
-  so forcing the fixed majors through `overrides` leaves an invalid tree — npm
-  either ignores the override or removes the packages outright, which breaks
-  both consumers. This clears when those dependencies widen their ranges;
-  Dependabot's weekly npm updates will surface it.
+`npm audit` reports **0 vulnerabilities**, including `--omit=dev` for the
+production tree. Two transitive advisories — `glob` < 14.0.2 (AbortSignal
+cancellation bypass) and `minimatch` < 11.0.1 (ReDoS via globparts amplification)
+— reached this project through `@fastify/static` → `glob` → `minimatch`, and
+neither parent declared a range that admits the fixed versions
+(`@fastify/static` wanted `glob: ^13`, `eslint` wanted `minimatch: ^10.2.5`).
+They are pinned here instead, via the root `package.json`:
 
-  **The vulnerable code path is not reachable here.** `@fastify/static` does
-  `require('glob')` at import time, so the module is loaded — but its only `glob()`
-  call site is guarded by `opts.wildcard === false` (that branch pre-registers a
-  route per file). This server registers the plugin with `root` and `prefix` only,
-  passing neither `wildcard` nor `list`, so it takes the `send`-based route and
-  `glob()` is never called.
+```json
+"glob": "^14.0.3",
+"minimatch": "^11.0.4"
+```
 
-  Verified at runtime by instrumenting `require.cache` while serving `/setup`:
-  `glob` is loaded, **`minimatch` is never loaded** — so the ReDoS code path is not
-  even in memory. The separate `glob` AbortSignal advisory requires calling
-  `glob()` with a signal, which this application never does. In development
-  `minimatch` is only used by `eslint`, over this repository's own ignore patterns
-  rather than untrusted input.
+**Note for maintainers — overrides need a full re-resolve.** Running `npm install`
+against an existing `node_modules` leaves the old versions installed and merely
+reports them as `invalid` in `npm ls`. Running it *without* `--legacy-peer-deps`
+is worse: npm removes the packages outright, which makes `npm audit` report zero
+while `require('glob')` throws `MODULE_NOT_FOUND` and both `@fastify/static` and
+`eslint` are broken. To apply or change an override: delete `node_modules` and
+`package-lock.json`, then `npm install --legacy-peer-deps`.
+
+Verified after the change: 13/13 packages build, 45/45 tests pass, and a running
+instance serves the SPA fallback (`/setup` → 200 `text/html`) and a hashed asset
+(`/assets/*.css` → 200 `text/css`) under `glob@14.0.3`.
