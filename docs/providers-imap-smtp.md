@@ -34,7 +34,27 @@ Enable two-step verification and generate an app password in your provider's sec
 
 ## 2. Configure the account
 
-Add the account via the CLI with the IMAP/SMTP option (**4**), providing host/port/TLS details interactively, or in the web UI / via the management API:
+**CLI:** `mcp-ecc add account`, then choose the IMAP/SMTP option (**4**). The wizard
+prompts for the app password and host/port/TLS details, with Gmail defaults.
+
+**Web UI:** *Accounts → Add account*, select **IMAP / SMTP**, and fill in the **Mail
+server** section — app password, IMAP and SMTP host/port, the TLS toggles, and an
+optional username. The same fields are editable afterwards from the account's details
+panel.
+
+- **Username** is the mailbox login. Leave it blank unless your provider gives you a
+  login name that differs from the email address — the email is used by default. It is
+  never the internal account id.
+- **Display name** (in the account's details, not the Mail server section) becomes the
+  display name on mail you send. Without it, the sender is the bare email address.
+- The **app password** is stored encrypted and is never sent back to the browser, so the
+  field is always empty when you reopen an account. Leaving it blank on save keeps the
+  stored password; it is only replaced when you type a new one.
+- **Send a test** on the account verifies the connection using the saved settings.
+
+Via the management API, the settings may be sent either nested under `config` or as
+flat fields (`imapHost`, `imapPort`, `imapTls`, `smtpHost`, `smtpPort`, `smtpSecure`,
+`username`) alongside `appPassword`:
 
 ```json
 {
@@ -46,6 +66,7 @@ Add the account via the CLI with the IMAP/SMTP option (**4**), providing host/po
   "email": "me@example.com",
   "appPassword": "abcd-efgh-ijkl-mnop",
   "config": {
+    "username": "me@example.com",  // optional; defaults to the email
     "imapHost": "imap.gmail.com",
     "imapPort": 993,
     "imapTls": true,

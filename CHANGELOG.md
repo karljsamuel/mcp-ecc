@@ -5,6 +5,51 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1] - 2026-11-02
+
+### Fixed
+
+- **The web UI could not configure an IMAP/SMTP account.** `POST /api/accounts`
+  ignored the app password, so an account created there had no credential at all
+  and could never authenticate; `PATCH` had no way to set or change one either.
+  Both routes now accept the app password and the mail settings. A blank password
+  on update keeps the stored secret, and no response ever contains it.
+- **IMAP/SMTP authenticated with the internal account id as the mailbox login.**
+  Accounts created in the web UI get a random UUID as their id, so the mail server
+  rejected the login. The login now resolves from an explicitly configured
+  username, then the account email, then the account id — the CLI creates accounts
+  with the email as their id, so those keep working unchanged.
+- **Outbound mail used the account id as its `From` address,** so mail sent from a
+  web-created account appeared to come from a UUID. The sender is now
+  `{ name: displayName, address: email }`, and an account with no resolvable
+  address fails loudly instead of sending.
+- **`displayName` was silently dropped on SQLite.** D1 gained `display_name` in
+  v2, but the SQLite `accounts` table never had the column, so a display name set
+  through `PATCH /api/accounts/:id` was never stored. Migration v5 adds it; the
+  value now persists and becomes the sender name above.
+- **The connection test ignored the account email,** so it failed for IMAP/SMTP
+  accounts even when the stored settings were correct.
+- **A partial settings update could reset an account to the defaults**
+  (`imap.gmail.com:993`). Fields that were not supplied are now left untouched.
+- **Mail settings were never returned to the client,** so the account form was
+  populated from defaults and saving it overwrote the real settings. Both the list
+  and detail responses now include the non-secret settings.
+- **CalDAV/CardDAV accounts could be created without a URL or an app password.**
+  Both are now collected and required.
+
+### Documentation
+
+- Merged the two changelog files — `CHANGELOG.md` and `Changelog.md`, differing
+  only in case, which collide on a case-insensitive filesystem and left readers
+  finding only one of them — into `CHANGELOG.md`.
+- README: the container runs as uid 1001, so a bind-mounted data directory must be
+  owned by it (a named volume is seeded automatically). Also documents that compose
+  interpolates `.env` from the compose directory — a missing or misnamed file
+  leaves every variable empty and starts the app in setup mode, which presents as
+  `/health` 200 with `/mcp` and `/api/*` returning 503 — and that environment
+  variables are captured at container creation, so a change needs
+  `--force-recreate`.
+
 ## [0.7.0] - 2026-11-02
 
 ### Breaking
