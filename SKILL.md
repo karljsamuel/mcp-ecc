@@ -120,13 +120,14 @@ Settings live in `.env` (or the environment). Never put a non-credential setting
 **Encryption key rules** — these are load-bearing:
 
 - A missing, empty or **placeholder** key is a **hard startup error**. Well-known placeholders
-  (`default-secret-key`, `change-me`, `change-me-to-a-long-random-secret`, `your-secret-here`,
-  `replace-me`) are refused.
+  (`default-secret-key`, `change-me`, `changeme`, `change-me-to-a-long-random-secret`,
+  `your-secret-here`, `replace-me`) are refused, case-insensitively and after trimming.
 - There is **no fallback key**, and the key is never read from or written to the database.
 - Generate one: `openssl rand -hex 32`.
 - Losing the key (or the database) makes stored credentials unreadable — every account must be
-  re-authenticated. Rotating via `MCP_ENCRYPTION_KEY_PREVIOUS` keeps old rows readable during a
-  rotation window.
+  re-authenticated. To rotate without that, set `MCP_ENCRYPTION_KEY_PREVIOUS` to
+  comma/whitespace-separated `<generation>:<key>` pairs: old generations stay readable while
+  rows are re-encrypted onto the current key, then drop the retired entry.
 
 Environment variables are captured **at container creation**: after editing `.env` or rotating
 a credential, recreate the container (`docker compose up -d --force-recreate`).
