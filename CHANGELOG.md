@@ -25,6 +25,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The `mcp-ecc` command did not exist inside the container image.** The CLI's bin was
+  never linked into a directory on `PATH`, so `docker exec mcp-ecc mcp-ecc …`, stdio MCP
+  clients and the setup flow all failed with "command not found" despite the built CLI
+  being present at `/app/packages/cli/dist/bin.js`. It is now linked into `/usr/local/bin`,
+  and the build asserts the link resolves.
+- **The container ran with the wrong primary group, breaking write access to `/data`.** The
+  user was created as `adduser --system --uid 1001 mcp-ecc` without `--ingroup nodejs`, so
+  it landed in `nogroup` (gid 65533) while `/data` is owned by `mcp-ecc:nodejs`. The app
+  could read the directory but not write it, and a bind-mounted `./data` surfaced as
+  `EACCES` at runtime. Both uid and gid are now 1001, matching what the README tells
+  operators to `chown` host directories to.
 - **`mail_listFolders` reported `0` for every Gmail folder.** The Gmail API reference is
   explicit that a label from `users.labels.list` contains only `id`, `name`,
   `messageListVisibility`, `labelListVisibility` and `type` — counts are not included and

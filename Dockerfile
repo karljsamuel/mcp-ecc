@@ -36,9 +36,14 @@ LABEL org.opencontainers.image.title="mcp-ecc"
 LABEL org.opencontainers.image.description="MCP server for Email, Calendar & Contacts — Google, Microsoft 365, Zoho, IMAP/SMTP, CalDAV, CardDAV. Multi-user admin UI and per-user MCP API keys."
 LABEL org.opencontainers.image.licenses="MIT"
 
+# The user must belong to the nodejs group, not just have uid 1001. Without --ingroup
+# it lands in nogroup (gid 65533), so its primary group does not match the group the
+# data directory is chowned to below — and a bind-mounted /data then looks writable to
+# root and read-only to the app. uid and gid are both 1001, which is what the README
+# tells operators to chown host directories to.
 RUN apk upgrade --no-cache \
   && addgroup --system --gid 1001 nodejs \
-  && adduser --system --uid 1001 mcp-ecc
+  && adduser --system --uid 1001 --ingroup nodejs mcp-ecc
 
 # Copy manifests + full workspace from the builder
 COPY --from=builder /app/package.json ./package.json
@@ -50,6 +55,14 @@ COPY --from=builder /app/turbo.json ./turbo.json
 # Keep only production deps (drops dev deps; keeps workspace links + built dist)
 RUN npm prune --omit=dev --ignore-scripts && \
     mkdir -p /data && chown -R mcp-ecc:nodejs /data
+
+# Put the CLI on PATH. `mcp-ecc` is the documented entry point for the stdio transport,
+# `docker exec` maintenance and the setup flow, but the package bin was never linked into
+# a PATH directory, so the command simply did not exist inside the image. The build output
+# already carries a node shebang and is executable; only the link was missing.
+# `command -v` fails the build if the link is ever broken.
+RUN ln -sf /app/packages/cli/dist/bin.js /usr/local/bin/mcp-ecc && \
+    command -v mcp-ecc
 
 USER mcp-ecc
 

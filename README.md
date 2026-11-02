@@ -108,6 +108,16 @@ Note that environment variables are captured when a container is **created**. If
 edit `.env` or rotate a credential, recreate the container — `docker compose up -d
 --force-recreate` — or the running container keeps the old values.
 
+#### The CLI is on `PATH` inside the container
+
+The image links `mcp-ecc` into `/usr/local/bin` (→ `/app/packages/cli/dist/bin.js`), so the
+CLI is available by name with nothing installed on the host — for stdio MCP clients,
+maintenance, and the setup flow:
+
+```bash
+docker exec -it mcp-ecc mcp-ecc --help
+```
+
 #### Persisting the generated configuration
 
 A `.env` written inside a container is lost when the container is recreated, so
