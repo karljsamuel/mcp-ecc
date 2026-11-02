@@ -26,6 +26,12 @@ import type {
   PaginatedResult,
 } from '@mcp-ecc/core';
 
+/** The count fields Gmail returns on the per-label resource (`users.labels.get`). */
+interface LabelCounts {
+  messagesUnread?: number | null;
+  messagesTotal?: number | null;
+}
+
 export class GoogleProvider implements IMailProvider, ICalendarProvider, IContactsProvider {
   private oauth2Client: InstanceType<typeof google.auth.OAuth2>;
   private gmail: ReturnType<typeof google.gmail>;
@@ -67,27 +73,23 @@ export class GoogleProvider implements IMailProvider, ICalendarProvider, IContac
   async listFolders(options: ListFoldersOptions = {}): Promise<MailFolder[]> {
     await this.ensureFreshToken();
 
-    // ONE request. `users.labels.list` returns `messagesUnread` and `messagesTotal` for EVERY
-    // label, system labels included, so no extra call is needed or made:
-    //  - the old `users.messages.list({labelIds:['INBOX'], q:'is:unread'})` probe is gone. It was
-    //    redundant (the INBOX label already carries an exact count) and less accurate
-    //    (resultSizeEstimate is documented as an estimate);
-    //  - system folders SENT/DRAFT/TRASH/SPAM/STARRED now report their real counts instead of a
-    //    hardcoded 0.
-    // `options.withUnreadCounts` needs no special handling here: the counts cost nothing extra,
-    // so the cheap path and the exact path are the same single round-trip.
+    // `users.labels.list` NEVER returns message counts. Per the API reference, each label
+    // resource from that method contains only id, name, messageListVisibility,
+    // labelListVisibility and type — counts live on the per-label resource and require
+    // `users.labels.get`. An earlier revision of this method assumed the counts came back
+    // for free, so every folder reported 0 in production while its inbox held mail.
+    //
+    // Consequence: an exact count costs one `labels.get` per folder. That is what
+    // `withUnreadCounts` now controls; the cheap path reports UNKNOWN_COUNT rather than a
+    // fabricated 0.
     const res = await this.gmail.users.labels.list({ userId: 'me' });
     const labels = res.data.labels || [];
-    const byId = new Map<string, { messagesUnread?: number | null; messagesTotal?: number | null }>();
-    for (const label of labels) {
-      if (label.id) byId.set(label.id, label);
-    }
 
-    const folders: MailFolder[] = [];
+    const targets: Array<{ id: string; name: string; type: MailFolder['type'] }> = [];
 
     for (const def of GoogleProvider.SYSTEM_FOLDERS) {
       if (!this.matchesFolderFilter(def.id, def.name, options.folderId)) continue;
-      folders.push(this.buildFolder(def.id, def.name, def.type, byId.get(def.id)));
+      targets.push(def);
     }
 
     for (const label of labels) {
@@ -96,11 +98,46 @@ export class GoogleProvider implements IMailProvider, ICalendarProvider, IContac
       // System labels are either exposed above (SYSTEM_FOLDERS) or not folders at all.
       if (label.type === 'system' || GoogleProvider.NON_FOLDER_LABELS.has(id)) continue;
       if (!this.matchesFolderFilter(id, label.name, options.folderId)) continue;
-      folders.push(this.buildFolder(id, label.name, 'custom', label));
+      targets.push({ id, name: label.name, type: 'custom' });
     }
 
-    return folders;
+    if (options.withUnreadCounts === false) {
+      return targets.map((t) =>
+        this.buildFolder(t.id, t.name, t.type, null, 'counts not requested (withUnreadCounts: false)'),
+      );
+    }
+
+    // One labels.get per folder, a few in flight at a time so a mailbox with many custom
+    // labels does not open hundreds of sockets at once.
+    const results = new Map<string, { counts: LabelCounts | null; reason?: string }>();
+    const queue = [...targets];
+    const countWorker = async (): Promise<void> => {
+      for (;;) {
+        const next = queue.shift();
+        if (!next) return;
+        try {
+          const got = await this.gmail.users.labels.get({ userId: 'me', id: next.id });
+          results.set(next.id, {
+            counts: { messagesUnread: got.data.messagesUnread, messagesTotal: got.data.messagesTotal },
+          });
+        } catch (error: any) {
+          // A single failing label must not fail the whole listing.
+          results.set(next.id, { counts: null, reason: `labels.get failed: ${error?.message || String(error)}` });
+        }
+      }
+    };
+    const workers = Math.min(GoogleProvider.COUNT_CONCURRENCY, targets.length);
+    await Promise.all(Array.from({ length: workers }, countWorker));
+
+    return targets.map((t) => {
+      const result = results.get(t.id);
+      if (!result) return this.buildFolder(t.id, t.name, t.type, null, 'count not determined');
+      return this.buildFolder(t.id, t.name, t.type, result.counts, result.reason);
+    });
   }
+
+  /** Bounded parallelism for the per-label count lookups. */
+  private static readonly COUNT_CONCURRENCY = 5;
 
   /**
    * Gmail system labels that are surfaced as folders, in a stable order. STARRED used to be typed
@@ -138,18 +175,23 @@ export class GoogleProvider implements IMailProvider, ICalendarProvider, IContac
     id: string,
     name: string,
     type: MailFolder['type'],
-    label?: { messagesUnread?: number | null; messagesTotal?: number | null } | null
+    counts: LabelCounts | null,
+    reason?: string
   ): MailFolder {
-    if (!label) {
-      // The label is missing from labels.list, so there is no count to report. Saying 0 here
-      // would claim the folder is empty.
+    // Gmail omits the count fields in more than one situation — never on labels.list, and
+    // not always even on labels.get. Reporting 0 for that would claim the folder is empty,
+    // so anything that is not an actual number is UNKNOWN_COUNT with an explanation.
+    const unread = counts && typeof counts.messagesUnread === 'number' ? counts.messagesUnread : null;
+    const total = counts && typeof counts.messagesTotal === 'number' ? counts.messagesTotal : null;
+
+    if (unread === null || total === null) {
       return {
         id,
         name,
         type,
-        unreadCount: UNKNOWN_COUNT,
-        totalCount: UNKNOWN_COUNT,
-        unreadCountError: 'label missing from Gmail labels.list response',
+        unreadCount: unread === null ? UNKNOWN_COUNT : unread,
+        totalCount: total === null ? UNKNOWN_COUNT : total,
+        unreadCountError: reason || (counts ? 'Gmail labels.get returned no message counts for this label' : 'count not determined'),
         createdAt: 0,
         updatedAt: 0,
       };
@@ -159,8 +201,8 @@ export class GoogleProvider implements IMailProvider, ICalendarProvider, IContac
       id,
       name,
       type,
-      unreadCount: typeof label.messagesUnread === 'number' ? label.messagesUnread : 0,
-      totalCount: typeof label.messagesTotal === 'number' ? label.messagesTotal : 0,
+      unreadCount: unread,
+      totalCount: total,
       createdAt: 0,
       updatedAt: 0,
     };
@@ -185,7 +227,12 @@ export class GoogleProvider implements IMailProvider, ICalendarProvider, IContac
       pageToken: options.cursor,
     });
 
-    if (!res.data.messages) return { items: [], nextCursor: undefined, total: res.data.resultSizeEstimate || undefined };
+    // `resultSizeEstimate` is deliberately NOT reported as `total`. Gmail documents it as
+    // an estimate, and it returns the same round number for mailboxes of very different
+    // sizes — two unrelated accounts both reported 201 while one INBOX held a single
+    // message — so presenting it as a count is simply wrong. Exact counts come from
+    // listFolders, which reads the per-label figures from labels.list.
+    if (!res.data.messages) return { items: [], nextCursor: undefined };
 
     const messages: EmailMessage[] = [];
     for (const msg of res.data.messages) {
@@ -199,7 +246,7 @@ export class GoogleProvider implements IMailProvider, ICalendarProvider, IContac
       }
     }
 
-    return { items: messages, nextCursor: res.data.nextPageToken || undefined, total: res.data.resultSizeEstimate || undefined };
+    return { items: messages, nextCursor: res.data.nextPageToken || undefined };
   }
 
   async getMessage(messageId: string): Promise<EmailMessage> {

@@ -118,7 +118,7 @@ for (const operation of ['CREATE TABLE IF NOT EXISTS users', 'PRAGMA table_info(
       assert.ok(!applied.includes(operation.startsWith('CREATE') || operation.startsWith('INSERT') ? 1 : 2));
       port.fault = undefined;
       await storage.initSchema();
-      assert.deepEqual(versions(db), [1, 2, 3, 4]);
+      assert.deepEqual(versions(db), [1, 2, 3, 4, 5]);
       assert.ok(columns(db, 'oauth_clients').includes('client_platform'));
     });
   }
@@ -140,7 +140,7 @@ for (const backend of ['sqlite', 'd1']) {
   test(`${backend}: fresh schema preserves every legacy column, constraint and index`, async t => {
     const { db, open } = database(t, backend);
     const storage = open();
-    if (backend === 'sqlite') assert.deepEqual(versions(db), [1, 2, 3, 4], 'constructor initializes synchronously');
+    if (backend === 'sqlite') assert.deepEqual(versions(db), [1, 2, 3, 4, 5], 'constructor initializes synchronously');
     await storage.initSchema();
     const expected = new DatabaseSync(':memory:');
     try {
@@ -151,6 +151,9 @@ for (const backend of ['sqlite', 'd1']) {
       for (const table of ['accounts', 'oauth_clients', 'users']) {
         expected.exec(`ALTER TABLE ${table} ADD COLUMN ${GENERATION_COLUMN[backend]} INTEGER NOT NULL DEFAULT 1`);
       }
+      // v5 adds the account display name to SQLite only. D1 has had the column since
+      // v2, which is exactly the asymmetry that made PATCH silently drop it here.
+      if (backend === 'sqlite') expected.exec(`ALTER TABLE accounts ADD COLUMN displayName TEXT`);
       assert.deepEqual(metadata(db), metadata(expected));
     } finally { expected.close(); }
 
@@ -171,6 +174,43 @@ for (const backend of ['sqlite', 'd1']) {
     assert.equal((await storage.getUserByApiKey('fixture-api-key')).id, 'owner');
     assert.equal(await storage.getUserByApiKey('not-the-key'), null);
     assert.equal(storage.encryptionKeyGeneration, 1, 'a single configured key is generation 1');
+  });
+
+  test(`${backend}: an account display name round-trips, updates and survives a reopen`, async t => {
+    const { db, open } = database(t, backend);
+    const storage = open();
+    // SQLite initializes in its constructor; D1 only does so on an explicit call.
+    await storage.initSchema();
+    await storage.saveUser({ id: 'owner', username: 'owner', displayName: 'Owner', passwordHash: 'fixture', role: 'admin', mcpApiKey: 'fixture-api-key', createdAt: 1, updatedAt: 1 });
+
+    // v5 adds the column under each backend's own naming convention.
+    assert.ok(columns(db, 'accounts').includes(backend === 'sqlite' ? 'displayName' : 'display_name'));
+
+    const account = {
+      id: 'acct-display', ownerId: 'owner', provider: 'imap', name: 'Mail', slug: 'mail',
+      email: 'owner@example.com', status: 'active', health: 'unknown', createdAt: 1, updatedAt: 1,
+      credentials: { appPassword: 'app-password-fixture', config: { email: 'owner@example.com' } },
+    };
+
+    await storage.saveAccount({ ...account, displayName: undefined });
+    assert.equal((await storage.getAccount(account.id)).displayName, undefined);
+
+    // The update path PATCH /api/accounts/:id uses. Before v5 this was silently dropped
+    // on SQLite, so outbound mail fell back to the internal account id.
+    await storage.updateAccount(account.id, { displayName: 'Karl J Samuel' });
+    assert.equal((await storage.getAccount(account.id)).displayName, 'Karl J Samuel');
+
+    // Read through a fresh adapter over the same database: it has to be in the row.
+    const reopened = await open().getAccount(account.id);
+    assert.equal(reopened.displayName, 'Karl J Samuel');
+    assert.equal(reopened.credentials.appPassword, 'app-password-fixture', 'the app password round-trips too');
+    assert.equal(reopened.credentials.config.email, 'owner@example.com');
+
+    // Clearing arrives from the API as an empty string (JSON has no undefined) and both
+    // backends treat that as "no display name". An explicit `undefined` is not used to
+    // clear: on D1 it means "not provided", which partial updates rely on.
+    await storage.updateAccount(account.id, { displayName: '' });
+    assert.equal((await open().getAccount(account.id)).displayName, undefined);
   });
 
   test(`${backend}: legacy rows in every table survive migration and repeated startup unchanged`, async t => {
@@ -362,7 +402,7 @@ test('sqlite: ledger write failure rolls back the entire version; constructor th
   assert.ok(!columns(db, 'oauth_clients').includes('clientPlatform'), 'ALTER rolled back');
   db.exec('DROP TRIGGER block_migration');
   open();
-  assert.deepEqual(versions(db), [1, 2, 3, 4]);
+  assert.deepEqual(versions(db), [1, 2, 3, 4, 5]);
 });
 
 test('sqlite: a real ALTER failure is visible and leaves its version unapplied', async t => {
@@ -377,7 +417,7 @@ test('d1: concurrent initSchema calls on one adapter share initialization', asyn
   const { db, open } = database(t, 'd1', true);
   const storage = open();
   await Promise.all([storage.initSchema(), storage.initSchema(), storage.initSchema()]);
-  assert.deepEqual(versions(db), [1, 2, 3, 4]);
+  assert.deepEqual(versions(db), [1, 2, 3, 4, 5]);
 });
 
 function columns(db, table) { return db.prepare(`PRAGMA table_info(${table})`).all().map(row => row.name); }
@@ -394,6 +434,6 @@ for (const backend of ['sqlite', 'd1']) {
       assert.ok(names.includes(column), `missing ${column}`);
     }
     assert.ok(columns(db, 'accounts').includes(GENERATION_COLUMN[backend]), 'v4 records the key generation');
-    assert.deepEqual(versions(db), [1, 2, 3, 4]);
+    assert.deepEqual(versions(db), [1, 2, 3, 4, 5]);
   });
 }

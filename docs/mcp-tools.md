@@ -43,17 +43,19 @@ Getting unread counts right:
 
 - **Default (`withUnreadCounts` omitted or `true`)** returns an **exact unread count for every folder**. Where a provider can only answer by measuring, it does so (bounded — see per-provider notes below) and never substitutes a global total.
 - **`folderId`** restricts the answer to one folder (matched by id, or case-insensitively by name) and returns that folder's exact count. This is the cheap single-folder probe: one folder-list request plus at most one count lookup (empty `folders` array if nothing matches).
-- **`withUnreadCounts: false`** is the cheap, name-only path: one round-trip and no per-folder measurement. On providers whose folder response already contains an authoritative count (Gmail labels, Graph `mailFolders`) that count is still returned, because it costs nothing; otherwise `unreadCount` is `-1`.
+- **`withUnreadCounts: false`** is the cheap, name-only path: one round-trip and no per-folder measurement. On providers whose folder response already contains an authoritative count (Graph `mailFolders`) that count is still returned, because it costs nothing; otherwise — including on Gmail, whose `labels.list` never carries counts — `unreadCount` is `-1`.
 - **`unreadCount: -1` (and `totalCount: -1`) means "not determined"**, never "empty". `0` always means the provider actually checked and the folder is empty. When a measurement was attempted and failed, `unreadCountError` explains why (e.g. a folder larger than the scan cap), which distinguishes it from "counts were not requested".
 
 Per provider:
 
 | Provider | Exact count source | Cost |
 | --- | --- | --- |
-| Google | `users.labels.list` → `messagesUnread` for every label, system labels included (STARRED is `type: "starred"`) | 1 request, no extras |
+| Google | `users.labels.list` to enumerate labels, then `users.labels.get` per folder for `messagesUnread`/`messagesTotal` — `labels.list` itself never returns counts | 1 request + one per folder returned (5 in flight) |
 | Microsoft | Graph `mailFolder.unreadItemCount` (`totalItemCount` for `totalCount`) | 1 request per 100 folders (pagination followed) |
 | Zoho | pages through the folder's messages, counting `status === "0"` | ≤ 10 pages (2000 messages) per folder, 4 folders in parallel, 20s budget |
 | IMAP/SMTP | `LIST` with `statusQuery {unseen, messages}` (LIST-STATUS / IMAP4rev2) | 1 round-trip; on servers without LIST-STATUS, one `STATUS` per folder through a 5-way pool under a 20s budget |
+
+Google note: per the Gmail API reference, each label from `labels.list` contains only `id`, `name`, `messageListVisibility`, `labelListVisibility` and `type`. Counts require `labels.get`. Passing `folderId` narrows the listing to one folder, so it costs exactly one count lookup. If a lookup fails or returns no counts, that folder reports `-1` and sets `unreadCountError` — it never reports `0`, which would claim the folder is empty.
 
 IMAP note: the connection is reused across calls (no connect/logout per call), timeouts are explicit (20s connect, 10s greeting, 60s socket), and the folder list is cached for 30s.
 
@@ -61,6 +63,8 @@ IMAP note: the connection is reused across calls (no connect/logout per call), t
 *Input:* `{ "accountId": "...", "folderId": "INBOX", "limit": 20, "cursor": "optional", "query": "optional" }`
 *Output:* `{ "items": [message envelopes], "nextCursor": "optional", "total": "optional" }`.
 Pass `nextCursor` into the next request's `cursor` to retrieve subsequent pages.
+
+`total` is only present when the provider can state a real count. It is **absent for Google**: Gmail's `resultSizeEstimate` is an estimate that returns the same round number for mailboxes of very different sizes, so it is not reported as a count. Use `mail.listFolders` for exact Google totals.
 
 ### `mail.getMessage`
 *Input:* `{ "accountId": "...", "messageId": "..." }`

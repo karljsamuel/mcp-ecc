@@ -41,6 +41,8 @@ Unlike Google, **a single Azure app registration works for all platforms**. You 
 
 Register the same client in mcp-ecc with platform `limited_input` (for CLI device-flow) and the sibling with platform `web` (for the web UI). Or register once with `limited_input` — the web UI will still work via device code displayed in the browser.
 
+For the web UI to use the device flow, the registration must also have **Allow public client flows** set to **Yes** (Azure portal → your app → *Authentication* → *Advanced settings* → *Allow public client flows*). Whether it is set cannot be read from the API, so mcp-ecc simply tries the device flow first and falls back to the browser flow when Microsoft declines — see [Authenticate](#4-authenticate) below.
+
 ### Account type: personal Outlook, single-tenant M365, multi-tenant
 
 | Account type | Supported account types | Tenant ID | Admin consent? |
@@ -94,11 +96,20 @@ mcp-ecc auth
 
 The CLI prints `https://microsoft.com/devicelogin` and a code. Sign in there and authorise.
 
-### Web UI / authorisation code
+### Web UI
 
-Add account → Microsoft → choose an OAuth client → complete the browser flow. Works for personal and work accounts depending on the app registration and tenant.
+Add account → Microsoft → choose an OAuth client. Which flow runs is chosen automatically:
 
-Re-authorise an account whose token has been revoked / expired via **Re-authenticate** (`POST /api/accounts/:id/reauth`).
+| App registration | Flow used |
+|---|---|
+| **Allow public client flows = Yes** | **Device code**, even in the browser. The panel shows the code and the verification page, polls while you approve, and completes on its own. |
+| **Allow public client flows = No** | Browser authorisation-code flow, which opens the Microsoft consent page and returns via `/oauth/callback`. |
+
+Both are decided by attempting the device flow first, so no setting has to be configured in mcp-ecc. A failing device-code request for any reason *other* than the registration's public-client-flow setting is surfaced as an error rather than quietly switching flows — otherwise a transient Microsoft outage or a wrong scope would look like a deliberate choice.
+
+Works for personal and work accounts depending on the app registration and tenant.
+
+Re-authorise an account whose token has been revoked / expired via **Re-authenticate** (`POST /api/accounts/:id/reauth`), which follows the same automatic selection. A device flow started here, or during account creation, returns the device code to the client — deliberately, so a Microsoft client can drive authentication itself — and can also be completed by `POST /api/oauth/device/poll`, which performs the token exchange server-side while the browser only drives the polling cadence.
 
 ## 5. Data model mapping
 

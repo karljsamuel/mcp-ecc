@@ -1,11 +1,107 @@
 # Changelog
 
-All notable changes to this project are documented here.
+All notable changes to this project will be documented in this file.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.7.0] — 2026-10-25
+## [0.8.0] - 2026-11-02
+
+### Added
+
+- **Microsoft accounts can authorise with a device code from the web UI.** Whether an app
+  registration permits the device flow cannot be read from any API, so the device flow is
+  attempted first and the browser authorisation-code flow is used only when Microsoft
+  declines for that particular reason. A device-code request that fails for any other
+  reason — a transient outage, a wrong scope — is surfaced as an error rather than quietly
+  switching flows, so a real fault cannot masquerade as a configuration choice. Google is
+  unaffected (it rejects Gmail scopes for device flows) and Zoho still follows its client's
+  platform.
+- `POST /api/oauth/device/poll` completes a device-authorisation flow: one poll per call,
+  answering `pending`, `complete`, `expired` or `error`. A transport failure is returned with
+  `retryable: true` so a dropped request does not abandon a flow the user has already
+  approved. On `complete` it stores the tokens and activates the account exactly as
+  `/oauth/callback` does, so the two flows converge on a single completion path. Only the
+  owner of the pending account can complete it, and the state is single-use.
+
+### Fixed
+
+- **The `mcp-ecc` command did not exist inside the container image.** The CLI's bin was
+  never linked into a directory on `PATH`, so `docker exec mcp-ecc mcp-ecc …`, stdio MCP
+  clients and the setup flow all failed with "command not found" despite the built CLI
+  being present at `/app/packages/cli/dist/bin.js`. It is now linked into `/usr/local/bin`,
+  and the build asserts the link resolves.
+- **The container ran with the wrong primary group, breaking write access to `/data`.** The
+  user was created as `adduser --system --uid 1001 mcp-ecc` without `--ingroup nodejs`, so
+  it landed in `nogroup` (gid 65533) while `/data` is owned by `mcp-ecc:nodejs`. The app
+  could read the directory but not write it, and a bind-mounted `./data` surfaced as
+  `EACCES` at runtime. Both uid and gid are now 1001, matching what the README tells
+  operators to `chown` host directories to.
+- **`mail_listFolders` reported `0` for every Gmail folder.** The Gmail API reference is
+  explicit that a label from `users.labels.list` contains only `id`, `name`,
+  `messageListVisibility`, `labelListVisibility` and `type` — counts are not included and
+  require `users.labels.get` per label. The provider assumed they came back for free, so
+  the counts were always absent and were then coerced to `0`, claiming every folder was
+  empty while the inboxes held unread mail. Counts are now fetched per folder (five in
+  flight) when `withUnreadCounts` is true; the cheap path reports `-1`, and a failed or
+  count-less lookup reports `-1` with `unreadCountError`. A genuine zero is still `0`.
+- **`mail.listMessages` reported Gmail's `resultSizeEstimate` as `total`.** That field is an
+  estimate and returns the same round number for mailboxes of very different sizes — two
+  unrelated accounts both reported `201`, and one of those inboxes held a single message.
+  Google no longer reports `total`; exact counts come from `mail.listFolders`.
+- **The web UI could not complete a device-authorisation flow at all.** No poll endpoint
+  existed, and `startFlow` did not retain the device code, so a device flow started from the
+  browser displayed a code nothing ever exchanged — it could only ever hang. The device code
+  and its polling interval are now persisted with the OAuth state, and the browser polls
+  until the flow completes, expires or fails.
+- The flow selector contradicted its own comment for Microsoft: the comment promised the
+  device flow for device-capable clients, while the expression hardcoded Microsoft into the
+  browser branch, making the device flow unreachable even for a desktop client.
+- Account creation and re-authentication responses now report `flowType`, `state` and
+  `interval`, so a caller can tell which flow was started and drive it to completion.
+
+- **The web UI could not configure an IMAP/SMTP account.** `POST /api/accounts`
+  ignored the app password, so an account created there had no credential at all
+  and could never authenticate; `PATCH` had no way to set or change one either.
+  Both routes now accept the app password and the mail settings. A blank password
+  on update keeps the stored secret, and no response ever contains it.
+- **IMAP/SMTP authenticated with the internal account id as the mailbox login.**
+  Accounts created in the web UI get a random UUID as their id, so the mail server
+  rejected the login. The login now resolves from an explicitly configured
+  username, then the account email, then the account id — the CLI creates accounts
+  with the email as their id, so those keep working unchanged.
+- **Outbound mail used the account id as its `From` address,** so mail sent from a
+  web-created account appeared to come from a UUID. The sender is now
+  `{ name: displayName, address: email }`, and an account with no resolvable
+  address fails loudly instead of sending.
+- **`displayName` was silently dropped on SQLite.** D1 gained `display_name` in
+  v2, but the SQLite `accounts` table never had the column, so a display name set
+  through `PATCH /api/accounts/:id` was never stored. Migration v5 adds it; the
+  value now persists and becomes the sender name above.
+- **The connection test ignored the account email,** so it failed for IMAP/SMTP
+  accounts even when the stored settings were correct.
+- **A partial settings update could reset an account to the defaults**
+  (`imap.gmail.com:993`). Fields that were not supplied are now left untouched.
+- **Mail settings were never returned to the client,** so the account form was
+  populated from defaults and saving it overwrote the real settings. Both the list
+  and detail responses now include the non-secret settings.
+- **CalDAV/CardDAV accounts could be created without a URL or an app password.**
+  Both are now collected and required.
+
+### Documentation
+
+- Merged the two changelog files — `CHANGELOG.md` and `Changelog.md`, differing
+  only in case, which collide on a case-insensitive filesystem and left readers
+  finding only one of them — into `CHANGELOG.md`.
+- README: the container runs as uid 1001, so a bind-mounted data directory must be
+  owned by it (a named volume is seeded automatically). Also documents that compose
+  interpolates `.env` from the compose directory — a missing or misnamed file
+  leaves every variable empty and starts the app in setup mode, which presents as
+  `/health` 200 with `/mcp` and `/api/*` returning 503 — and that environment
+  variables are captured at container creation, so a change needs
+  `--force-recreate`.
+
+## [0.7.0] - 2026-11-02
 
 ### Breaking
 
@@ -148,3 +244,187 @@ while `require('glob')` throws `MODULE_NOT_FOUND` and both `@fastify/static` and
 Verified after the change: 13/13 packages build, 45/45 tests pass, and a running
 instance serves the SPA fallback (`/setup` → 200 `text/html`) and a hashed asset
 (`/assets/*.css` → 200 `text/css`) under `glob@14.0.3`.
+
+## [0.6.0] - 2026-09-10
+
+### Added
+- **Complete MCP account synchronisation** — `accounts.sync` now synchronises mail folders/messages, calendars/events, and contacts with per-domain result and error reporting.
+- **Live provider health checks** — startup, periodic, and on-demand connection checks now exercise provider APIs and persist `healthy`/`unhealthy` status.
+- **Versioned central schema** — SQLite and D1 share a tracked schema manifest, migration ledger, idempotent upgrades, rollback/retry behaviour, and legacy-column preservation.
+
+### Changed
+- **Stable release** — removed beta publishing tags; npm and MCP Registry releases now use the stable channel.
+- **OAuth callback flow** — browser authentication redirects back to Accounts with success/error feedback and persists returned account credentials and provider metadata.
+- **Zoho Calendar CRUD** — uses Zoho `range`, `eventdata`, calendar/event UIDs, ETags, bounded date ranges, URL encoding, and compact timestamp parsing.
+- **Contact update payloads** — Google includes source ETags; Zoho uses the documented contacts payload structure.
+- **Docker security** — Alpine packages are upgraded during image builds and unnecessary compiler packages are removed from the runtime image.
+- **npm runtime configuration** — CRLF environment values are trimmed for reliable Windows `.env` use.
+
+### Fixed
+- **D1 HTTP batch requests** — the REST client no longer sends the Workers-only array batch format; statements execute through valid D1 HTTP query objects.
+- **D1 legacy OAuth secrets** — previous WebCrypto-encrypted client secrets remain recoverable after migration to the current encryption implementation.
+- **MCP contact creation** — normalises optional email/phone arrays and removes transport-only fields before provider calls.
+- **Admin DELETE requests** — empty DELETE requests no longer send an invalid JSON content type.
+- **CLI version reporting** — the CLI reports the installed package version instead of the legacy hardcoded beta version.
+- **Login/session races** — stale authentication probes cannot overwrite successful login state; sessions persist through restarts.
+
+### Security
+- **Dependency overrides** — updated vulnerable transitive npm packages including `ip-address`, `qs`, `tar`, and `undici`.
+- **Docker base updates** — builder and runtime Alpine layers run `apk upgrade --no-cache` during image creation.
+
+### Maintenance
+- **Monorepo cleanup** — removed the obsolete pre-monorepo root `src/` implementation; all supported runtime code now lives under `packages/*`.
+- **Release metadata** — aligned workspace packages, npm metadata, MCP Registry metadata, documentation, and lockfile at `0.6.0`.
+
+## [0.5.1] - 2026-09-08
+
+### Added
+- **Provider-aware OAuth flows** — Google uses desktop or web authorisation clients; Microsoft uses one Azure application with web authorisation in the UI and device flow in the CLI; Zoho supports web, desktop and limited-input clients.
+- **OAuth callback redirect** — browser authorisation now returns to the Accounts page with success or error feedback.
+- **Live account health checks** — provider connectivity is checked at startup, every five minutes, and on demand from Account Details.
+- **Schema migrations** — SQLite and D1 use a tracked, central schema manifest with versioned, idempotent migrations and legacy-column upgrades.
+- **Persistent sessions** — web sessions survive management API restarts for both SQLite and D1.
+- **Admin UI OAuth management** — platform-aware OAuth client CRUD, storage visibility, logo/favicon branding and protected login routing.
+
+### Fixed
+- D1 OAuth client secrets encrypted by the previous WebCrypto implementation can be recovered during migration and reauthentication.
+- Microsoft web authentication no longer incorrectly uses an undisplayed device-code flow.
+- Zoho browser callbacks now persist provider client metadata, including the regional accounts server.
+- Account test-connection no longer returns a missing route; it performs a real provider check and records health.
+- Login race conditions no longer overwrite a successful login with a stale unauthenticated probe.
+
+## [0.4.0-beta.1] - 2026-09-01
+
+### Added
+- **Interactive TUI**: running `mcp-ecc` with no arguments opens a terminal UI — ASCII-art banner, centered subtitle, and a `mcp-ecc ›` prompt where commands are typed without the `mcp-ecc` prefix (`login`, `list accounts`, `add account`, `edit account`, `reauthenticate`, `remove account`, `start`, `exit`).
+- **CalDAV provider** (calendar) — full implementation replacing the placeholder stub: list calendars, list/get/create/update/delete events, free/busy. Uses standard WebDAV (tsdav client) — service discovery, PROPFIND, PUT/GET/DELETE with etags. Stable event UIDs on update.
+- **CardDAV provider** (contacts) — full implementation replacing the placeholder stub: list/get/create/update/delete/search contacts, vCard 3.0 with stable UIDs.
+- **`edit account`** — now edits name, slug, email and status, and (for IMAP/SMTP/CalDAV/CardDAV) can update the app password.
+- **`reauthenticate [slug]`** — re-runs the OAuth flow for a Google/Microsoft/Zoho account whose token expired or was revoked; resets status to `active`.
+- **OAuth client type** — new clients record whether they are **public** (Desktop / Installed / Non-browser app) or **confidential** (Web app / server-side). Token refresh behaves accordingly (public clients never send a client secret).
+- **Zoho device flow** — implemented against Zoho's v3 device endpoints (`/oauth/v3/device/code`, `/oauth/v3/device/token`) with correct `device_request`/`device_token` grant types and millisecond intervals.
+- **Zoho HTML send** — `mail.sendMessage` now sends HTML (was plaintext-only) using the correct `/api/accounts/{accountId}/messages` endpoint and the authenticated mailbox address as the From address.
+- **Zoho folder-aware mail** — `mail.listMessages` resolves folder names (e.g. `INBOX`) to Zoho folder IDs; `mail.getMessage` fetches metadata + content via the folder-scoped content endpoint.
+- **Microsoft token refresh** — real refresh implementation (was a no-op placeholder); empty-body responses (e.g. `sendMail` 202) handled gracefully.
+- **IMAP/SMTP** — fixed UID-based fetch/flag/move/delete operations; message flags now read correctly (read/unread state).
+- **Google flags** — `mail.setFlags` `\Seen` semantics corrected (mark read ↔ unread mapping to the UNREAD label).
+- **MCP integration tests** — reusable scripts under `scripts/` exercising every tool over the real stdio MCP protocol against live accounts.
+
+### Changed
+- **Port selection** — the CLI's local OAuth callback port now starts at 5000 and skips ports blocked by Chromium (`5060`, `5061`, `6000`, `6566`, `6665–6669`, `6697`), avoiding `ERR_UNSAFE_PORT` in the browser.
+- **CLI documentation** — new `docs/cli.md` reference; `docs/deployment-cli.md` rewritten for the npm-install workflow (no more clone-and-build as the primary path).
+- **Zoho scopes** — corrected default scope set: `ZohoMail.messages.ALL`, `ZohoMail.folders.READ`, `ZohoCalendar.calendar.ALL`, `ZohoCalendar.event.ALL`, `zohocontacts.contactapi.ALL`, `ZohoMail.accounts.READ`.
+- **Browser success page** — no emoji (wasn't rendering everywhere); shows the account name and email after authorization.
+
+### Fixed
+- Zoho device flow previously printed `undefined` URL/code (snake_case response fields were not normalised) and polled with the wrong grant type.
+- Zoho calendar events failed: wrong endpoint (needs calendar UID, `eventdata` query param, compact `yyyyMMdd'T'HHmmss'Z'` dates) and delete needed the event UID + etag.
+- Zoho contacts failed: wrong endpoint (`/api/v1/contacts` → `/api/v1/accounts/self/contacts`) and wrong payload shape/field names.
+- Microsoft accounts failed with "JWT is not well formed" — expired tokens were never refreshed (placeholder) and public clients wrongly sent a client secret.
+- IMAP `listMessages` returned zero messages — `fetchOne` was called with `uid: true` inside the query instead of as an option.
+- Google `setFlags` inverted read/unread.
+- SQLite storage: `oauth_clients` gained a `clientType` column with an automatic migration for existing databases.
+
+## [0.3.1] - 2026-08-30
+
+### Added
+- Public `GET /api/bootstrap-status` and `GET /api/info` endpoints (redirect URI + MCP endpoint for the UI).
+- Serve `SKILL.md` and `llms.txt` at `GET /setup/skill.md` and `GET /setup/llms.txt`.
+- Settings page "MCP connection" panel: endpoint, copyable client-config JSON, per-user API key, SKILL.md/llms.txt links.
+- Add-Account modal: select-or-create OAuth client, inline client credentials, and display of the OAuth redirect URI.
+- MIT licence (`LICENSE`) + licence field across all packages; OCI description/licence labels on the Docker image.
+- Docker Hub overview sync: publish workflow pushes the README as the repository description.
+
+### Changed
+- Merge IMAP/SMTP into a single "IMAP/SMTP" provider option (was two).
+- Rewrite README for public audiences (shields.io badges, concise sections).
+- Upgrade GitHub Actions to Node-24-native versions (checkout@v5, docker/*@v4/v6).
+
+### Fixed
+- Bootstrap flow: fresh install now routes to a "create admin" screen instead of a bare login.
+- Hard-gate `/api/auth/bootstrap` — returns 400 once an admin exists (no self-registration).
+- Settings page crash ("Cannot read properties of undefined (reading 'displayName')") — `/api/settings/me` now returns the `{settings, mcpApiKey}` shape.
+
+## [0.3.0] - 2026-08-30
+
+### Added
+- **Multi-user authentication** — `users` table (admin + user roles), first-run admin bootstrap, session-cookie auth for the web UI + REST API, scrypt password hashing.
+- **Per-user MCP API keys** — each user has a unique key; the `/mcp` endpoint requires `Authorization: Bearer <key>` and scopes /mcp to that user's accounts only.
+- **Per-account OAuth clients** — OAuth client IDs/secrets are stored per account (multiple per provider: personal, org-A, org-B), encrypted at rest. No OAuth credentials in `.env`.
+- **Account identity** — each account has a human `name` (free text) and a URL-safe unique `slug` ([a-z0-9], `-`/`_`) used as the stable MCP resource key (`mcp-ecc://{slug}/…`).
+- **Admin user management** — admin can create/delete users and reset passwords; each user self-manages their own email/calendar/contact accounts.
+- **React + Vite + Tailwind admin UI** served by the Fastify API (fixes the previous 404): sidebar with Accounts / Users (admin) / Settings; account card grid with auth key (green/red) + health badges, edit + detail modal; users page; settings with MCP API key display + rotation.
+- **Docker Hub publishing** — images pushed to both `ghcr.io/karljsamuel/mcp-ecc` and `karljsamuel/mcp-ecc`, multi-arch (amd64+arm64), with a `:beta` tag on beta releases and `:latest` on main.
+- **npm + MCP Registry readiness** — scoped package `@karljsamuel/mcp-ecc` with `mcpName` (`io.github.karljsamuel/mcp-ecc`), `server.json`, `llms.txt`, `SKILL.md`, and a manual `npm-publish` workflow.
+- **Documentation** — `docs/auth-users.md`, `docs/accounts-identity.md`; per-provider docs updated for per-account OAuth clients and OAuth-only usage for Microsoft 365.
+- **Toolchain** — turbo v2 (tasks schema), Node 24 LTS, `npm audit` clean (0 vulnerabilities).
+
+### Changed
+- `.env` reduced to server-level settings only: `MCP_ENCRYPTION_KEY`, `PUBLIC_URL`, `HOST`, `HOST_PORT`, `SESSION_SECRET`.
+- Single-container Docker deployment (web UI + REST + MCP on one port 3001).
+- Removed `docker-compose.example.yml` (a single, env-driven `docker-compose.yml` remains).
+- MCP resource URIs now use account slugs instead of raw ids.
+
+### Notes
+- Microsoft 365: app passwords / SMTP basic auth are being retired — use OAuth (Microsoft Graph) only.
+- CalDAV / CardDAV adapters remain scaffolded stubs.
+- Cloudflare Workers still supports only HTTP-API providers (no IMAP/CardDAV).
+
+## [0.2.0] - 2026-08-28
+
+### Added
+- **Monorepo restructure** — single-package codebase reorganised into a Turbo + npm-workspaces monorepo under `packages/`.
+- **Core package** (`@mcp-ecc/core`) — unified domain types, storage adapter interface, centralised `OAuthManager` (PKCE, device-code and authorization-code flows), and shared utilities.
+- **Storage adapters**:
+  - `@mcp-ecc/storage-sqlite` — SQLite adapter for local/Docker (AES-256-GCM encryption; native `better-sqlite3` optional dependency).
+  - `@mcp-ecc/storage-d1` — Cloudflare D1 adapter for Workers (Web Crypto encryption).
+  - `@mcp-ecc/storage-memory` — in-memory adapter for development and tests.
+- **Provider packages**:
+  - `@mcp-ecc/provider-google` — Gmail, Google Calendar, People/Contacts.
+  - `@mcp-ecc/provider-microsoft` — Microsoft Graph (Mail, Calendar, Contacts), incl. multi-tenant M365 via tenant ID.
+  - `@mcp-ecc/provider-zoho` — Zoho Mail, Calendar, Contacts (regional endpoints).
+  - `@mcp-ecc/provider-imap-smtp` — IMAP (read/search/manage) and SMTP (send).
+  - `@mcp-ecc/provider-caldav` — CalDAV calendar adapter (scaffolded).
+  - `@mcp-ecc/provider-carddav` — CardDAV contacts adapter (scaffolded).
+- **MCP Server** (`@mcp-ecc/mcp-server`) — namespaced tools (`mail.*`, `calendar.*`, `contacts.*`, `accounts.*`), resources (`mcp-ecc://{account}/today-agenda`), and prompts (`daily_briefing`, `weekly_review`).
+- **Management API** (`@mcp-ecc/management-api`) — Fastify REST API, WebSocket sync endpoint, SPA serving, OAuth routes.
+- **CLI** (`@mcp-ecc/cli`) — `mcp-ecc` command: interactive auth wizard, account management, and stdio MCP server transport.
+- **Cloudflare Workers entry** (`@mcp-ecc/workers-entry`) — Hono-based edge worker with D1 storage and REST/OAuth endpoints.
+- **Containerisation** — multi-stage `Dockerfile` (CLI/MCP server) and `Dockerfile.api` (management API), refreshed `docker-compose.yml` with two services.
+- **Workers config** — `wrangler.toml` with D1 binding and staging/production environments.
+- **Documentation** — `docs/` with deployment guides (CLI, Docker, Cloudflare Workers), per-provider setup guides, and an MCP tools reference; rewritten `README.md`.
+
+### Changed
+- Restructured from a single-package layout to a TurboRepo monorepo.
+- Renamed MCP tools from verbose `email_*` / `calendar_*` / `contacts_*` to short namespaced `mail.*` / `calendar.*` / `contacts.*` / `accounts.*`.
+- Centralised OAuth management (previously split across providers) into the core `OAuthManager`.
+- Abstracted storage behind a single `StorageAdapter` interface with SQLite, D1, and in-memory backends.
+- CLI storage default switched to the in-memory adapter pending a persistent default in Docker mode.
+- Package exports standardised with `import` / `require` / `types` conditions for both ESM and CommonJS consumers.
+- `better-sqlite3` moved to an optional dependency so the monorepo builds without native toolchain (installs cleanly in the Docker builder).
+
+### Fixed
+- GitHub Actions publish workflow — removed a duplicated `uses:` key that made the workflow file invalid.
+- TypeScript compilation across all packages (strict-mode errors, project references, module resolution).
+- `workers-entry` rootDir/paths errors by resolving built packages and adding Cloudflare Workers types.
+
+### Notes
+- **Cloudflare Workers limitation:** IMAP/SMTP, CalDAV and CardDAV require a Node.js runtime and do not run on Workers; the `/sse` and `/messages` MCP endpoints are placeholders pending a Workers-compatible MCP transport.
+- **CalDAV / CardDAV** adapters are scaffolded stubs in this release — full WebDAV implementations are planned.
+
+## [0.1.0] - 2026-07-10
+
+### Added
+- Created the core TypeScript Model Context Protocol (MCP) server architecture.
+- Added localized secure storage (`src/storage.ts`) supporting optional AES-256-GCM encryption.
+- Implemented OAuth 2.0 Device Authorization Grant (Device Code Flow) helper in `src/auth.ts`.
+- Integrated abstract multi-provider registry (`src/providers/registry.ts`) routing standard interfaces.
+- Implemented full Google Workspace integration (`src/providers/google.ts`) covering Gmail, Calendar, and Contacts.
+- Implemented Microsoft Graph integration (`src/providers/microsoft.ts`) covering Outlook Mail, Calendars, and Contacts (supports Tenant ID configuration for M365 organization accounts).
+- Implemented Zoho Mail integration (`src/providers/zoho.ts`) for email reading and sending.
+- Implemented traditional IMAP/SMTP standard provider (`src/providers/imap-smtp.ts`).
+- Created standardized MCP Router layer (`src/mcp-server.ts`) exposing custom resources (daily agenda) and tools (`email_*`, `calendar_*`, `contacts_*`).
+- Developed a comprehensive interactive executable CLI wrapper (`src/bin.ts`, `src/bin-handler.ts`).
+- Created lightweight container configurations (`Dockerfile`, `docker-compose.yml`) and local bin installer (`install.sh`).
+- Added a GitHub Actions workflow (`.github/workflows/publish.yml`) to automatically build and publish the container image to GHCR under the name `mcp-ecc`.
+- Cleaned up and deleted legacy/temporary personal repositories (`mcp-email-calendar-contacts`, `mcc-ecp`) and moved active development to the public `mcp-ecc` repository.

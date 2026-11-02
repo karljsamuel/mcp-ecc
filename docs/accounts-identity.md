@@ -42,15 +42,23 @@ Accounts are self-managed by their owner through the web UI or the management RE
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| `POST` | `/api/accounts` | Create an account `{ "name", "slug", "provider", "email", "config" }` |
+| `POST` | `/api/accounts` | Create an account `{ "name", "slug", "provider", "email", "config" }`, plus `appPassword` and the mail settings for IMAP/SMTP, CalDAV and CardDAV |
 | `GET` | `/api/accounts` | List your accounts |
 | `GET` | `/api/accounts/:id` | Account detail |
-| `PATCH` | `/api/accounts/:id` | Update `name`, `slug`, `displayName`, `status`, … |
+| `PATCH` | `/api/accounts/:id` | Update `name`, `slug`, `displayName`, `status`, … and, for password-backed providers, `appPassword` and the mail settings |
 | `POST` | `/api/accounts/:id/reauth` | Re-run OAuth for an expired / revoked token |
 | `POST` | `/api/accounts/:id/test-connection` | Verify the account's credentials still work |
 | `DELETE` | `/api/accounts/:id` | Remove the account |
 
 Every route is automatically scoped to the signed-in **user**: a user can only read/write their own accounts, and actions through the MCP endpoint are further scoped by the bearer key to that user's accounts.
+
+`displayName` is the human-facing identity for an account and is what outbound mail uses as its sender name. It is stored on both database backends; on SQLite the column is added by migration v5.
+
+The app password is one-way from the client's point of view: it is accepted on create and update, stored encrypted, and **never returned in any response**. On update a blank or absent value means "keep the stored password", so a form that never receives the secret cannot erase it. The non-secret mail settings (`imapHost`, `imapPort`, `imapTls`, `smtpHost`, `smtpPort`, `smtpSecure`, `username`) are returned as `mailConfig` on both the list and the detail route, so an edit form is populated from stored values rather than defaults.
+
+Device-authorisation flows are completed over HTTP. `POST /api/accounts` and `POST /api/accounts/:id/reauth` return `flowType`, `userCode`, `verificationUri`, `deviceCode` and a `state`. The **device code is returned deliberately**: for Microsoft clients the code has to reach the browser for the user to complete authentication, so a client is allowed to drive the flow itself. Treat it as sensitive — it is short-lived and valid for a single authorisation.
+
+The browser UI instead posts `state` to `POST /api/oauth/device/poll`, which performs **one** poll and answers `pending`, `complete`, `expired` or `error` (with `retryable: true` when the failure was a dropped request rather than a refusal). On `complete` it stores the tokens and activates the account exactly as `GET /oauth/callback` does, and the state is then single-use. Only the owner of the pending account can complete it through that route. Microsoft uses the device flow whenever its app registration permits it, browser included, falling back to the authorisation-code flow otherwise; see `docs/providers-microsoft.md`.
 
 ## Relationship to OAuth clients
 

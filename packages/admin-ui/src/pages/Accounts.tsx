@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   accountsApi,
   infoApi,
@@ -8,7 +8,7 @@ import {
   STATUS_LABELS,
   type ServerInfo,
 } from '../api';
-import type { Account, AccountCreateInput, AccountStatus, OAuthClient, ProviderName } from '../types';
+import type { Account, AccountCreateInput, AccountStatus, MailSettingsInput, OAuthClient, ProviderName } from '../types';
 import {
   Alert,
   HealthBadge,
@@ -20,6 +20,155 @@ import type { ToastPush } from './toast';
 
 const PROVIDERS: ProviderName[] = ['google', 'microsoft', 'zoho', 'imap', 'caldav', 'carddav'];
 const isOAuthProvider = (p: ProviderName) => ['google', 'microsoft', 'zoho'].includes(p);
+/** Providers that authenticate with an app password rather than an OAuth flow. */
+const isPasswordProvider = (p: ProviderName) => ['imap', 'smtp', 'caldav', 'carddav'].includes(p);
+/** Providers whose settings are IMAP/SMTP hosts and ports. */
+const isMailProvider = (p: ProviderName) => ['imap', 'smtp'].includes(p);
+
+const DEFAULT_IMAP_PORT = 993;
+const DEFAULT_SMTP_PORT = 465;
+
+type MailSettings = MailSettingsInput;
+
+/**
+ * Mail server settings for an account.
+ *
+ * The API never returns the app password, so on an existing account this field starts
+ * empty and a blank value means "keep the stored password" — the placeholder says so
+ * explicitly, so an empty box is not read as a request to clear the secret.
+ */
+function MailSettingsFields({
+  provider,
+  value,
+  onChange,
+  passwordRequired,
+}: {
+  provider: ProviderName;
+  value: MailSettings;
+  onChange: (next: MailSettings) => void;
+  passwordRequired: boolean;
+}) {
+  const set = (patch: Partial<MailSettings>) => onChange({ ...value, ...patch });
+  const asPort = (raw: string, fallback: number) => {
+    if (raw.trim() === '') return fallback;
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? parsed : fallback;
+  };
+
+  return (
+    <div className="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-4">
+      <div className="text-sm font-semibold text-slate-700">Mail server</div>
+
+      <div>
+        <label className="label">App password</label>
+        <input
+          className="input"
+          type="password"
+          autoComplete="new-password"
+          value={value.appPassword ?? ''}
+          onChange={(e) => set({ appPassword: e.target.value })}
+          placeholder={passwordRequired ? 'App password' : 'Leave blank to keep the stored password'}
+          required={passwordRequired}
+        />
+        <p className="mt-1 text-xs text-slate-500">
+          Stored encrypted and never sent back to this page.
+        </p>
+      </div>
+
+      {isMailProvider(provider) ? (
+        <>
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            <div>
+              <label className="label">IMAP host</label>
+              <input
+                className="input"
+                value={value.imapHost ?? ''}
+                onChange={(e) => set({ imapHost: e.target.value })}
+                placeholder="imap.gmail.com"
+              />
+            </div>
+            <div>
+              <label className="label">IMAP port</label>
+              <input
+                className="input"
+                type="number"
+                min={1}
+                max={65535}
+                value={value.imapPort ?? DEFAULT_IMAP_PORT}
+                onChange={(e) => set({ imapPort: asPort(e.target.value, DEFAULT_IMAP_PORT) })}
+              />
+            </div>
+            <div>
+              <label className="label">SMTP host</label>
+              <input
+                className="input"
+                value={value.smtpHost ?? ''}
+                onChange={(e) => set({ smtpHost: e.target.value })}
+                placeholder="smtp.gmail.com"
+              />
+            </div>
+            <div>
+              <label className="label">SMTP port</label>
+              <input
+                className="input"
+                type="number"
+                min={1}
+                max={65535}
+                value={value.smtpPort ?? DEFAULT_SMTP_PORT}
+                onChange={(e) => set({ smtpPort: asPort(e.target.value, DEFAULT_SMTP_PORT) })}
+              />
+            </div>
+          </div>
+
+          <label className="flex items-center gap-2 text-sm text-slate-700">
+            <input
+              type="checkbox"
+              className="accent-indigo-600"
+              checked={value.imapTls !== false}
+              onChange={(e) => set({ imapTls: e.target.checked })}
+            />
+            Use TLS for IMAP
+          </label>
+          <label className="flex items-center gap-2 text-sm text-slate-700">
+            <input
+              type="checkbox"
+              className="accent-indigo-600"
+              checked={value.smtpSecure !== false}
+              onChange={(e) => set({ smtpSecure: e.target.checked })}
+            />
+            Use TLS for SMTP
+          </label>
+
+          <div>
+            <label className="label">Username</label>
+            <input
+              className="input"
+              value={value.username ?? ''}
+              onChange={(e) => set({ username: e.target.value })}
+              placeholder="Defaults to the account email"
+            />
+            <p className="mt-1 text-xs text-slate-500">
+              Leave blank unless your mail provider gives you a separate login name.
+            </p>
+          </div>
+        </>
+      ) : (
+        <div>
+          <label className="label">{provider === 'carddav' ? 'CardDAV URL' : 'CalDAV URL'}</label>
+          <input
+            className="input"
+            value={(provider === 'carddav' ? value.carddavUrl : value.caldavUrl) ?? ''}
+            onChange={(e) =>
+              set(provider === 'carddav' ? { carddavUrl: e.target.value } : { caldavUrl: e.target.value })
+            }
+            placeholder="https://example.com/.well-known/dav"
+            required
+          />
+        </div>
+      )}
+    </div>
+  );
+}
 
 function KeyIcon({ authenticated }: { authenticated: boolean }) {
   return (
@@ -210,6 +359,13 @@ function CreateAccountModal({
   const [name, setName] = useState('');
   const [slug, setSlug] = useState('');
   const [email, setEmail] = useState('');
+  const [mail, setMail] = useState<MailSettings>({});
+  const [deviceFlow, setDeviceFlow] = useState<{
+    userCode?: string;
+    verificationUri?: string;
+    state?: string;
+    interval?: number;
+  } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -235,6 +391,16 @@ function CreateAccountModal({
     setSelectedClientId('');
   }, [provider]);
 
+  // A device flow belongs to one attempt, and this modal stays mounted between openings
+  // (only its `open` prop changes). Without this, a finished or abandoned flow would
+  // resurface as a dead code with no form behind it the next time Add account is clicked.
+  useEffect(() => {
+    if (open) {
+      setDeviceFlow(null);
+      setError(null);
+    }
+  }, [open]);
+
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -256,8 +422,40 @@ function CreateAccountModal({
             accountsServer: accountsServer.trim() || undefined,
           };
         }
+      } else if (isPasswordProvider(provider)) {
+        // Without a secret these providers can never authenticate, so the server
+        // rejects the request outright — fail here first with a clearer message.
+        const appPassword = mail.appPassword?.trim();
+        if (!appPassword) throw new Error('An app password is required for this provider');
+        payload.appPassword = appPassword;
+
+        if (isMailProvider(provider)) {
+          payload.imapHost = mail.imapHost?.trim() || undefined;
+          payload.imapPort = mail.imapPort ?? DEFAULT_IMAP_PORT;
+          payload.imapTls = mail.imapTls !== false;
+          payload.smtpHost = mail.smtpHost?.trim() || undefined;
+          payload.smtpPort = mail.smtpPort ?? DEFAULT_SMTP_PORT;
+          payload.smtpSecure = mail.smtpSecure !== false;
+          payload.username = mail.username?.trim() || undefined;
+        } else {
+          const key = provider === 'carddav' ? 'carddavUrl' : 'caldavUrl';
+          const url = (provider === 'carddav' ? mail.carddavUrl : mail.caldavUrl)?.trim();
+          if (!url) throw new Error(`${provider === 'carddav' ? 'CardDAV' : 'CalDAV'} URL is required`);
+          payload.config = { [key]: url };
+        }
       }
       const result = await accountsApi.create(payload);
+      if (result.flowType === 'device_code') {
+        // A device flow needs the user to approve in another tab and then be exchanged
+        // server-side, so keep this modal open and let the panel drive it to completion.
+        setDeviceFlow({
+          userCode: result.userCode,
+          verificationUri: result.verificationUri,
+          state: result.state,
+          interval: result.interval,
+        });
+        return;
+      }
       if (result.authorizeUrl) {
         window.open(result.authorizeUrl, '_blank', 'noopener');
         push(result.message ?? 'Account created. Complete authorisation in the new tab.', 'info');
@@ -274,6 +472,33 @@ function CreateAccountModal({
 
   return (
     <Modal open={open} onClose={onClose} title="Add account">
+      {deviceFlow ? (
+        <>
+          <p className="mb-3 text-sm text-slate-600">
+            The account has been created and is waiting for approval. This panel updates as soon
+            as you approve it — you can close it and approve later.
+          </p>
+          <DeviceAuthPanel
+            userCode={deviceFlow.userCode}
+            verificationUri={deviceFlow.verificationUri}
+            state={deviceFlow.state}
+            intervalSeconds={deviceFlow.interval}
+            onComplete={() => {
+              push(`Account "${name || email}" created`, 'success');
+              onCreated();
+            }}
+            onFailed={(message) => setError(message)}
+          />
+          {error && (
+            <div className="mb-3">
+              <Alert tone="error">{error}</Alert>
+            </div>
+          )}
+          <div className="flex justify-end pt-2">
+            <button type="button" onClick={onClose} className="btn-secondary">Close</button>
+          </div>
+        </>
+      ) : (
       <form onSubmit={submit} className="space-y-4">
         {error && <Alert tone="error">{error}</Alert>}
         <div>
@@ -390,6 +615,10 @@ function CreateAccountModal({
           </div>
         )}
 
+        {isPasswordProvider(provider) && (
+          <MailSettingsFields provider={provider} value={mail} onChange={setMail} passwordRequired />
+        )}
+
         <div className="flex justify-end gap-3 pt-2">
           <button type="button" onClick={onClose} className="btn-secondary">Cancel</button>
           <button type="submit" disabled={busy} className="btn-primary">
@@ -397,7 +626,158 @@ function CreateAccountModal({
           </button>
         </div>
       </form>
+      )}
     </Modal>
+  );
+}
+
+/* --------------------------- device authorisation --------------------- */
+
+/** How long to keep polling before treating the code as expired (codes last ~15 min). */
+const DEVICE_AUTH_TIMEOUT_MS = 15 * 60 * 1000;
+
+/**
+ * Completes a device-authorisation flow in the browser.
+ *
+ * The token exchange happens server-side, so this only drives the cadence: it polls
+ * once per interval and shows what the user has to do. It stays on screen until the
+ * flow completes, expires, or fails — a device flow cannot be finished by opening a
+ * tab and walking away, which is why the code has to be readable here.
+ */
+function DeviceAuthPanel({
+  userCode,
+  verificationUri,
+  state,
+  intervalSeconds,
+  onComplete,
+  onFailed,
+}: {
+  userCode?: string;
+  verificationUri?: string;
+  state?: string;
+  intervalSeconds?: number;
+  onComplete: () => void;
+  onFailed: (message: string) => void;
+}) {
+  const [status, setStatus] = useState<'waiting' | 'expired' | 'error'>('waiting');
+  const [message, setMessage] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  // Kept in refs so the polling effect does not restart when a parent re-renders.
+  // Synced in an effect rather than during render, which is the supported approach.
+  const complete = useRef(onComplete);
+  const failed = useRef(onFailed);
+  useEffect(() => {
+    complete.current = onComplete;
+    failed.current = onFailed;
+  });
+
+  const intervalMs = Math.max(5, intervalSeconds ?? 5) * 1000;
+
+  useEffect(() => {
+    if (!state) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = Date.now() + DEVICE_AUTH_TIMEOUT_MS;
+
+    const poll = async () => {
+      if (cancelled) return;
+      if (Date.now() > deadline) {
+        setStatus('expired');
+        setMessage('The code expired before it was approved. Start again to get a new one.');
+        return;
+      }
+      try {
+        const result = await accountsApi.pollDeviceAuth(state);
+        if (cancelled) return;
+        if (result.status === 'complete') {
+          complete.current();
+          return;
+        }
+        if (result.status === 'pending') {
+          timer = setTimeout(() => void poll(), intervalMs);
+          return;
+        }
+        if (result.status === 'error' && result.retryable) {
+          // A dropped request, not a refusal from the provider: the user may already have
+          // approved, so keep polling to the deadline instead of abandoning the flow.
+          setMessage(result.message ?? null);
+          timer = setTimeout(() => void poll(), intervalMs);
+          return;
+        }
+        setStatus(result.status === 'expired' ? 'expired' : 'error');
+        setMessage(result.message ?? null);
+        if (result.status === 'error') failed.current(result.message ?? 'Authorisation failed');
+      } catch (err) {
+        if (cancelled) return;
+        // A dropped poll is not fatal: keep trying until the deadline.
+        setMessage((err as Error).message);
+        timer = setTimeout(() => void poll(), intervalMs);
+      }
+    };
+
+    void poll();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [state, intervalMs]);
+
+  return (
+    <div className="mb-4 rounded-lg border border-indigo-200 bg-indigo-50 p-4">
+      <div className="text-sm font-semibold text-indigo-900">Approve this sign-in</div>
+      <ol className="mt-2 list-decimal space-y-1 pl-5 text-sm text-indigo-900">
+        <li>
+          Open{' '}
+          {verificationUri ? (
+            <a className="font-medium underline" href={verificationUri} target="_blank" rel="noreferrer">
+              {verificationUri}
+            </a>
+          ) : (
+            'the verification page'
+          )}
+        </li>
+        <li>Enter this code:</li>
+      </ol>
+
+      <div className="mt-2 flex items-center gap-3">
+        <code className="rounded bg-white px-3 py-2 font-mono text-lg font-bold tracking-widest text-indigo-700">
+          {userCode || '—'}
+        </code>
+        {userCode && (
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={() => {
+              // Clipboard access can be refused (unfocused document, permissions). The code
+              // is on screen either way, so the rejection needs no louder handling.
+              void navigator.clipboard
+                ?.writeText(userCode)
+                .then(() => {
+                  setCopied(true);
+                  setTimeout(() => setCopied(false), 2000);
+                })
+                .catch(() => {});
+            }}
+          >
+            {copied ? 'Copied' : 'Copy code'}
+          </button>
+        )}
+      </div>
+
+      <div className="mt-3 text-sm">
+        {status === 'waiting' && !message && (
+          <span className="text-indigo-800">Waiting for approval…</span>
+        )}
+        {status === 'waiting' && message && <span className="text-amber-700">{message}</span>}
+        {status === 'expired' && (
+          <span className="text-amber-700">{message ?? 'The code expired.'}</span>
+        )}
+        {status === 'error' && (
+          <span className="text-red-700">Authorisation failed{message ? `: ${message}` : '.'}</span>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -422,12 +802,15 @@ function AccountDetailModal({
   const [slug, setSlug] = useState(account.slug);
   const [displayName, setDisplayName] = useState(account.displayName ?? '');
   const [status, setStatus] = useState<AccountStatus>(account.status ?? 'active');
+  // Seeded from the account's non-secret settings. The app password is deliberately
+  // absent — the server never returns it — so the field starts empty on every open.
+  const [mail, setMail] = useState<MailSettings>({ ...(account.mailConfig ?? {}) });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [reauthClientId, setReauthClientId] = useState<string>('');
-  const [reauthFlow, setReauthFlow] = useState<{ verificationUri?: string; userCode?: string; message?: string } | null>(null);
+  const [reauthFlow, setReauthFlow] = useState<{ verificationUri?: string; userCode?: string; message?: string; state?: string; interval?: number; device?: boolean } | null>(null);
 
   const authenticated = isAuthenticatedAccount(account);
 
@@ -435,12 +818,35 @@ function AccountDetailModal({
     setBusy(true);
     setError(null);
     try {
-      await accountsApi.update(account.id, {
+      const patch: Parameters<typeof accountsApi.update>[1] = {
         name: name.trim() ? name : undefined,
         slug,
         status,
         ...(displayName !== account.displayName ? { displayName } : {}),
-      });
+      };
+
+      if (isPasswordProvider(account.provider)) {
+        // Blank means "keep the stored password", so only send a non-empty one.
+        const appPassword = mail.appPassword?.trim();
+        if (appPassword) patch.appPassword = appPassword;
+
+        if (isMailProvider(account.provider)) {
+          patch.username = mail.username?.trim() ?? '';
+          patch.imapHost = mail.imapHost?.trim() || undefined;
+          patch.imapPort = mail.imapPort ?? DEFAULT_IMAP_PORT;
+          patch.imapTls = mail.imapTls !== false;
+          patch.smtpHost = mail.smtpHost?.trim() || undefined;
+          patch.smtpPort = mail.smtpPort ?? DEFAULT_SMTP_PORT;
+          patch.smtpSecure = mail.smtpSecure !== false;
+        } else {
+          const url = (account.provider === 'carddav' ? mail.carddavUrl : mail.caldavUrl)?.trim();
+          if (url) {
+            patch.config = { [account.provider === 'carddav' ? 'carddavUrl' : 'caldavUrl']: url };
+          }
+        }
+      }
+
+      await accountsApi.update(account.id, patch);
       push('Account updated', 'success');
       onUpdated();
     } catch (err) {
@@ -469,6 +875,18 @@ function AccountDetailModal({
     setError(null);
     try {
       const res = await accountsApi.reauth(account.id, reauthClientId || undefined);
+      if (res.flowType === 'device_code') {
+        // The panel below completes this flow; opening a tab would only show the code.
+        setReauthFlow({
+          userCode: res.userCode,
+          verificationUri: res.verificationUri,
+          state: res.state,
+          interval: res.interval,
+          device: true,
+        });
+        push('Enter the code shown to re-authenticate', 'info');
+        return;
+      }
       setReauthFlow({ verificationUri: res.verificationUri || res.authorizeUrl, userCode: res.userCode, message: res.message });
       push(res.message ?? 'Re-auth flow started', 'info');
       if (res.authorizeUrl) {
@@ -557,11 +975,32 @@ function AccountDetailModal({
 
       {reauthFlow && (
         <div className="mb-4">
-          <Alert tone="info">
-            <div>{reauthFlow.message || 'Complete reauthentication.'}</div>
-            {reauthFlow.verificationUri && <div className="mt-2"><a className="font-medium underline" href={reauthFlow.verificationUri} target="_blank" rel="noreferrer">Open authorisation page</a></div>}
-            {reauthFlow.userCode && <div className="mt-2 font-mono font-bold">Code: {reauthFlow.userCode}</div>}
-          </Alert>
+          {reauthFlow.device ? (
+            <DeviceAuthPanel
+              userCode={reauthFlow.userCode}
+              verificationUri={reauthFlow.verificationUri}
+              state={reauthFlow.state}
+              intervalSeconds={reauthFlow.interval}
+              onComplete={() => {
+                push('Re-authentication completed', 'success');
+                setReauthFlow(null);
+                onUpdated();
+              }}
+              onFailed={(message) => setError(message)}
+            />
+          ) : (
+            <Alert tone="info">
+              <div>{reauthFlow.message || 'Complete reauthentication.'}</div>
+              {reauthFlow.verificationUri && <div className="mt-2"><a className="font-medium underline" href={reauthFlow.verificationUri} target="_blank" rel="noreferrer">Open authorisation page</a></div>}
+              {reauthFlow.userCode && <div className="mt-2 font-mono font-bold">Code: {reauthFlow.userCode}</div>}
+            </Alert>
+          )}
+        </div>
+      )}
+
+      {isPasswordProvider(account.provider) && (
+        <div className="mb-5">
+          <MailSettingsFields provider={account.provider} value={mail} onChange={setMail} passwordRequired={false} />
         </div>
       )}
 

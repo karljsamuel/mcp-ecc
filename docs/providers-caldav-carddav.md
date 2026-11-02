@@ -37,6 +37,12 @@ CLI prompts:
 - **CalDAV URL** — e.g. `https://nextcloud.example.com/remote.php/dav/`
 - **App password** — the DAV password (masked, confirmed)
 
+In the web UI, *Accounts → Add account* → **CalDAV** collects the same two values. Both
+are required: without a URL there is nothing to connect to, and without an app password
+the account has no credential. The URL and password are editable later from the account's
+details panel; the password field is always blank there, and leaving it blank keeps the
+stored one.
+
 Account config equivalent:
 
 ```json
@@ -67,6 +73,10 @@ CLI prompts:
 
 - **CardDAV URL** — e.g. `https://nextcloud.example.com/remote.php/dav/`
 - **App password** — the DAV password (masked, confirmed)
+
+In the web UI, *Accounts → Add account* → **CardDAV** collects the same two values, also
+both required. The URL and password are editable later from the account's details panel;
+the password field is always blank there, and leaving it blank keeps the stored one.
 
 Account config equivalent:
 

@@ -10,6 +10,7 @@ import { readFileSync, existsSync } from 'fs';
 import type { StorageAdapter, ProviderName, OAuthClient, User } from '@mcp-ecc/core';
 import {
   AuthService,
+  DeviceFlowUnsupportedError,
   OAuthManager,
   applySetup,
   checkConfig,
@@ -33,6 +34,8 @@ import {
   validateSetupStep,
   verifySetupDatabase,
   type DBConnectionProbe,
+  type OAuthConfig,
+  type OAuthFlowType,
   type ResolvedSetupConfig,
   type SetupAnswers,
   type SetupD1Config,
@@ -82,6 +85,10 @@ export interface ManagementApiConfig {
 
 const SESSION_COOKIE = 'mcp_ecc_session';
 const AUTH_PROVIDERS: ProviderName[] = ['google', 'microsoft', 'zoho'];
+/** Providers that authenticate with a stored app password instead of an OAuth flow. */
+const PASSWORD_PROVIDERS: string[] = ['imap', 'smtp', 'caldav', 'carddav'];
+/** Providers whose settings are a set of IMAP/SMTP hosts and ports. */
+const MAIL_SETTING_PROVIDERS: string[] = ['imap', 'smtp'];
 
 // Strip secret fields before returning an entity to clients.
 function publicUser(u: User, includeApiKey = false) {
@@ -91,6 +98,64 @@ function publicUser(u: User, includeApiKey = false) {
 }
 function publicClient(c: OAuthClient) {
   return { id: c.id, provider: c.provider, label: c.label, clientId: c.clientId, scopes: c.scopes, tenantId: c.tenantId, accountsServer: c.accountsServer, clientPlatform: c.clientPlatform, clientType: c.clientType, enabled: c.enabled };
+}
+
+/** Providers that store settings worth echoing back to the account form. */
+const SETTING_PROVIDERS: string[] = ['imap', 'smtp', 'caldav', 'carddav'];
+
+/**
+ * Non-secret provider settings for an account, as returned to clients.
+ *
+ * Explicitly allowlisted rather than spreading the stored config, because the app
+ * password shares the credentials object with it. Returned by both the list and the
+ * detail route: the account form is populated from whichever the client has, so a
+ * missing field here would show defaults — or, for the DAV URLs, an empty box that
+ * hides the account's real endpoint.
+ */
+function publicMailConfig(account: any) {
+  if (!SETTING_PROVIDERS.includes(account.provider)) return undefined;
+  const config = account.credentials?.config || {};
+  return {
+    username: config.username,
+    imapHost: config.imapHost,
+    imapPort: config.imapPort,
+    imapTls: config.imapTls,
+    smtpHost: config.smtpHost,
+    smtpPort: config.smtpPort,
+    smtpSecure: config.smtpSecure,
+    caldavUrl: config.caldavUrl,
+    carddavUrl: config.carddavUrl,
+  };
+}
+
+/**
+ * Drop keys whose value is undefined.
+ *
+ * Absent fields arrive as undefined and must not take part in a merge: spreading them
+ * over the stored settings would erase the real values and let the defaults in
+ * buildMailConfig take over, silently pointing the account at imap.gmail.com.
+ */
+function defined(input: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined));
+}
+
+/** Settings accepted as flat form fields, in addition to a nested `config` object. */
+const MAIL_SETTING_FIELDS = [
+  'username',
+  'imapHost',
+  'imapPort',
+  'imapTls',
+  'smtpHost',
+  'smtpPort',
+  'smtpSecure',
+  'caldavUrl',
+  'carddavUrl',
+] as const;
+
+function pickMailSettings(body: any): Record<string, unknown> {
+  const picked: Record<string, unknown> = {};
+  for (const field of MAIL_SETTING_FIELDS) picked[field] = body?.[field];
+  return defined(picked);
 }
 
 export class ManagementApi {
@@ -251,7 +316,18 @@ export class ManagementApi {
       case 'imap':
       case 'smtp': {
         const { ImapSmtpProvider } = await import('@mcp-ecc/provider-imap-smtp');
-        const provider = new ImapSmtpProvider(account.id, credentials);
+        // Same identity injection the MCP path performs. Without the account email the
+        // provider resolves the mailbox login to the account id, which is a random UUID
+        // for accounts created in the web UI, so the test fails even when the host,
+        // port and app password are all correct.
+        const provider = new ImapSmtpProvider(account.id, {
+          ...credentials,
+          config: {
+            ...(credentials.config || {}),
+            email: account.email,
+            ...(account.displayName ? { displayName: account.displayName } : {}),
+          },
+        });
         await provider.listMessages('INBOX', { limit: 1 });
         return 'IMAP connection succeeded.';
       }
@@ -270,6 +346,83 @@ export class ManagementApi {
       default:
         throw new Error(`Unsupported provider: ${account.provider}`);
     }
+  }
+
+  /**
+   * Merge and validate the settings an IMAP/SMTP account needs.
+   *
+   * `incoming` wins over `base`, so a partial update only changes what it names. The
+   * app password is deliberately not part of config — it is stored separately and is
+   * never returned to clients. Throws with a user-facing message on invalid input.
+   */
+  private buildMailConfig(
+    provider: string,
+    incoming: Record<string, any>,
+    email: string,
+    base: Record<string, any> = {},
+  ): Record<string, any> {
+    const merged: Record<string, any> = { ...base, ...incoming };
+    if (!MAIL_SETTING_PROVIDERS.includes(provider)) return merged;
+
+    const asString = (value: unknown): string => (typeof value === 'string' ? value.trim() : '');
+    const asPort = (value: unknown, fallback: number, label: string): number => {
+      if (value === undefined || value === null || value === '') return fallback;
+      const port = Number(value);
+      if (!Number.isInteger(port) || port < 1 || port > 65535) {
+        throw new Error(`${label} must be a whole number between 1 and 65535`);
+      }
+      return port;
+    };
+
+    const out: Record<string, any> = {
+      ...merged,
+      email,
+      imapHost: asString(merged.imapHost) || 'imap.gmail.com',
+      imapPort: asPort(merged.imapPort, 993, 'IMAP port'),
+      imapTls: merged.imapTls !== false,
+      smtpHost: asString(merged.smtpHost) || 'smtp.gmail.com',
+      smtpPort: asPort(merged.smtpPort, 465, 'SMTP port'),
+      smtpSecure: merged.smtpSecure !== false,
+    };
+    // Only stored when explicitly supplied; otherwise the mailbox address is the login.
+    if (asString(merged.username)) out.username = asString(merged.username);
+    else delete out.username;
+    return out;
+  }
+
+  /**
+   * Start an OAuth flow, preferring the device flow for Microsoft whenever its app
+   * registration allows it — including from the browser UI.
+   *
+   * Whether a registration permits public client flows cannot be read from anywhere
+   * except the attempt itself, so the device flow is tried first and the browser flow
+   * is used only when Microsoft declines for that particular reason. Every other
+   * failure propagates: silently switching flows on a transient error would hide it.
+   */
+  private async startOAuthFlow(
+    provider: ProviderName,
+    preferred: OAuthFlowType,
+    config: OAuthConfig,
+    accountId: string,
+  ): Promise<{ flow: Awaited<ReturnType<OAuthManager['startFlow']>>; flowType: OAuthFlowType }> {
+    if (provider === 'microsoft' && preferred === 'device_code') {
+      try {
+        const flow = await this.oauthManager.startFlow(provider, 'device_code', config, accountId);
+        return { flow, flowType: 'device_code' };
+      } catch (error) {
+        if (!(error instanceof DeviceFlowUnsupportedError)) throw error;
+        this.app.log.info(
+          { provider, accountId },
+          'Microsoft app registration is not enabled for public client flows; using the browser flow',
+        );
+        // The registration cannot use device code at all, so retry with the browser flow
+        // rather than the preferred one — which is the device flow that just failed.
+        const flow = await this.oauthManager.startFlow(provider, 'authorization_code', config, accountId);
+        return { flow, flowType: 'authorization_code' };
+      }
+    }
+    const flow = await this.oauthManager.startFlow(provider, preferred, config, accountId);
+    return { flow, flowType: preferred };
   }
 
   private setupRoutes(): void {
@@ -521,6 +674,7 @@ export class ManagementApi {
         id: a.id, provider: a.provider, name: a.name, slug: a.slug, email: a.email,
         displayName: a.displayName, status: a.status, health: a.health,
         lastSyncAt: a.lastSyncAt, authenticated: !!(a.credentials?.accessToken || a.credentials?.appPassword),
+        mailConfig: publicMailConfig(a),
       })) };
     });
 
@@ -532,14 +686,32 @@ export class ManagementApi {
         displayName: account.displayName, status: account.status, health: account.health, lastSyncAt: account.lastSyncAt,
         authenticated: !!(account.credentials?.accessToken || account.credentials?.appPassword),
         oauthClientId: account.credentials?.oauthClientId,
+        mailConfig: publicMailConfig(account),
       } };
     });
 
     this.app.post('/api/accounts', async (request: any, reply: any) => {
-      const { name, provider, slug, email, config, oauthClientId, client } = request.body;
+      const { name, provider, slug, email, displayName, appPassword, config, oauthClientId, client } = request.body;
       if (!name || !provider || !email) return reply.code(400).send({ error: 'name, provider, email required' });
+
+      // Password-backed providers need their secret up front; OAuth providers obtain
+      // tokens through the flow started further down.
+      if (PASSWORD_PROVIDERS.includes(provider) && !appPassword) {
+        return reply.code(400).send({ error: `appPassword is required for ${provider} accounts` });
+      }
+
+      let mailConfig: Record<string, any>;
+      try {
+        // Settings may arrive nested in `config` or as the flat fields the web form
+        // posts; both are merged into the stored config.
+        mailConfig = this.buildMailConfig(provider, { ...(config || {}), ...pickMailSettings(request.body) }, String(email).trim());
+      } catch (error: any) {
+        return reply.code(400).send({ error: error?.message || 'Invalid mail settings' });
+      }
+
       const id = randomUUID();
-      const credentials: any = { config };
+      const credentials: any = { config: mailConfig };
+      if (appPassword) credentials.appPassword = appPassword;
       const ownerId = request.user.id;
 
       // If inline client credentials were provided for an OAuth provider,
@@ -561,7 +733,7 @@ export class ManagementApi {
 
       const account = {
         id, ownerId, provider, name, slug: slug || generateSlug(name, id),
-        email, displayName: undefined, credentials,
+        email, displayName: typeof displayName === 'string' && displayName.trim() ? displayName.trim() : undefined, credentials,
         status: 'active' as const, health: 'unknown' as const, lastSyncAt: undefined,
         createdAt: Date.now(), updatedAt: Date.now(),
       };
@@ -591,8 +763,23 @@ export class ManagementApi {
             }
           }
           const redirectUri = `${this.publicUrl}/oauth/callback`;
-          const flowType = provider === 'google' || provider === 'microsoft' || oauthClient.clientPlatform === 'web' ? 'authorization_code' : 'device_code';
-          const flow = await this.oauthManager.startFlow(provider as ProviderName, flowType, OAuthManager.clientToConfig(oauthClient, redirectUri), account.id);
+          // Google rejects Gmail scopes for the device flow. Microsoft prefers the
+          // device flow wherever its registration permits it, browser UI included, and
+          // falls back to the authorisation-code flow when it does not. Zoho follows
+          // the client's platform.
+          const preferredFlow: OAuthFlowType = provider === 'google'
+            ? 'authorization_code'
+            : provider === 'microsoft'
+              ? 'device_code'
+              : oauthClient.clientPlatform === 'web'
+                ? 'authorization_code'
+                : 'device_code';
+          const { flow, flowType } = await this.startOAuthFlow(
+            provider as ProviderName,
+            preferredFlow,
+            OAuthManager.clientToConfig(oauthClient, redirectUri),
+            account.id,
+          );
           await this.storage.updateCredentials(account.id, { oauthClientId: oauthClient.id });
           return reply.code(201).send({
             account: { id: account.id, slug: account.slug, name: account.name },
@@ -600,6 +787,9 @@ export class ManagementApi {
             verificationUri: flow.verificationUri,
             userCode: flow.userCode,
             deviceCode: flow.deviceCode,
+            state: flow.state,
+            flowType,
+            interval: flow.interval,
             message: flowType === 'device_code' ? `Account created. Go to ${flow.verificationUri} and enter code: ${flow.userCode}` : 'Account created. Open the authorisation URL to complete setup.',
           });
         }
@@ -627,6 +817,37 @@ export class ManagementApi {
       const allowed = ['name', 'slug', 'displayName', 'status', 'health', 'email'];
       const updates: any = {};
       for (const k of allowed) if (request.body[k] !== undefined) updates[k] = request.body[k];
+
+      // Provider settings and the app password. A blank or absent password means "keep
+      // the stored one" — the secret is never sent back to the UI, so the field starts
+      // empty on every load and must not be read as a request to clear it.
+      const { appPassword, config } = request.body ?? {};
+      const supplied = pickMailSettings(request.body);
+      const hasSettings = config !== undefined || Object.keys(supplied).length > 0;
+
+      if (hasSettings || appPassword) {
+        if (!PASSWORD_PROVIDERS.includes(account.provider)) {
+          return reply
+            .code(400)
+            .send({ error: `Mail settings are only supported for ${PASSWORD_PROVIDERS.join(', ')} accounts` });
+        }
+        try {
+          const email = String(updates.email ?? account.email ?? '').trim();
+          const nextConfig = this.buildMailConfig(
+            account.provider,
+            { ...(config || {}), ...supplied },
+            email,
+            account.credentials?.config || {},
+          );
+          const credentialUpdates: any = { config: nextConfig };
+          // Only replace the secret when a non-empty one was supplied.
+          if (typeof appPassword === 'string' && appPassword.length > 0) credentialUpdates.appPassword = appPassword;
+          await this.storage.updateCredentials(account.id, credentialUpdates);
+        } catch (error: any) {
+          return reply.code(400).send({ error: error?.message || 'Invalid mail settings' });
+        }
+      }
+
       await this.storage.updateAccount(account.id, updates);
       return { success: true };
     });
@@ -673,15 +894,26 @@ export class ManagementApi {
         return reply.code(400).send({ error: `OAuth client '${client.label}' has no usable client secret. Edit or recreate this client with the secret.` });
       }
       const redirectUri = `${this.publicUrl}/oauth/callback`;
-      // Google cannot use device flow for Gmail/Calendar scopes. Web clients
-      // must use the browser authorisation-code flow; device-capable clients
-      // use device flow for Microsoft/Zoho.
-      const flowType = account.provider === 'google' || account.provider === 'microsoft' || client.clientPlatform === 'web' ? 'authorization_code' : 'device_code';
+      // Google cannot use device flow for Gmail/Calendar scopes. Microsoft prefers the
+      // device flow wherever its registration permits it, browser UI included, and falls
+      // back to the authorisation-code flow when it does not. Zoho follows the client.
+      const preferredFlow: OAuthFlowType = account.provider === 'google'
+        ? 'authorization_code'
+        : account.provider === 'microsoft'
+          ? 'device_code'
+          : client.clientPlatform === 'web'
+            ? 'authorization_code'
+            : 'device_code';
       try {
-        const flow = await this.oauthManager.startFlow(account.provider as ProviderName, flowType, OAuthManager.clientToConfig(client, redirectUri), account.id);
+        const { flow, flowType } = await this.startOAuthFlow(
+          account.provider as ProviderName,
+          preferredFlow,
+          OAuthManager.clientToConfig(client, redirectUri),
+          account.id,
+        );
         // Persist the chosen client on the account for later token refresh.
         await this.storage.updateCredentials(account.id, { oauthClientId: client.id });
-        return { authorizeUrl: flow.verificationUri, verificationUri: flow.verificationUri, userCode: flow.userCode, deviceCode: flow.deviceCode, interval: flow.interval, state: flow.state, message: flowType === 'device_code' ? `Go to ${flow.verificationUri} and enter code: ${flow.userCode}` : 'Open the authorisation URL to complete reauthentication.' };
+        return { authorizeUrl: flow.verificationUri, verificationUri: flow.verificationUri, userCode: flow.userCode, deviceCode: flow.deviceCode, state: flow.state, flowType, interval: flow.interval, message: flowType === 'device_code' ? `Go to ${flow.verificationUri} and enter code: ${flow.userCode}` : 'Open the authorisation URL to complete reauthentication.' };
       } catch (error: any) {
         return reply.code(400).send({ error: error?.message || 'Unable to start reauthentication flow' });
       }
@@ -715,6 +947,78 @@ export class ManagementApi {
         const message = encodeURIComponent(error?.message || 'OAuth completion failed');
         return reply.redirect(`/accounts?oauth=error&message=${message}`);
       }
+    });
+
+    // Completes a device-authorisation flow started by the create or reauth route.
+    //
+    // The token exchange needs the client secret, so it has to happen server-side; the
+    // browser drives the cadence and never sees the device code. One attempt per call —
+    // holding the request open for the life of the flow would pin a connection, and the
+    // browser can report progress between attempts.
+    this.app.post('/api/oauth/device/poll', async (request: any, reply: any) => {
+      const { state } = request.body || {};
+      if (!state) return reply.code(400).send({ error: 'state required' });
+
+      const oauthState = await this.storage.getOAuthState(String(state));
+      if (!oauthState) return reply.code(404).send({ error: 'Unknown or expired authorisation state' });
+      if (oauthState.flowType !== 'device_code' || !oauthState.deviceCode) {
+        return reply.code(400).send({ error: 'This authorisation is not a device flow' });
+      }
+      if (!oauthState.accountId) {
+        return reply.code(400).send({ error: 'This authorisation is not linked to an account' });
+      }
+
+      // Only the owner of the pending account may complete it.
+      const account = await this.storage.getAccount(oauthState.accountId);
+      if (!account || account.ownerId !== request.user.id) {
+        return reply.code(404).send({ error: 'Account not found' });
+      }
+
+      const config = OAuthManager.clientToConfig(
+        {
+          provider: oauthState.provider,
+          clientId: oauthState.clientId,
+          clientSecret: oauthState.clientSecret || '',
+          scopes: oauthState.scopes || [],
+          tenantId: oauthState.tenantId,
+          accountsServer: oauthState.accountsServer,
+        },
+        oauthState.redirectUri || '',
+      );
+
+      const result = await this.oauthManager.pollDeviceCodeOnce(oauthState.deviceCode, config);
+
+      if (result.status === 'complete') {
+        // Deliberately the same completion as /oauth/callback, so a device flow and a
+        // browser flow leave the account in exactly the same state.
+        await this.storage.updateCredentials(account.id, {
+          accessToken: result.tokens.accessToken,
+          refreshToken: result.tokens.refreshToken,
+          expiryDate: result.tokens.expiresAt,
+          scope: result.tokens.scope,
+          idToken: result.tokens.idToken,
+          tokenType: result.tokens.tokenType,
+          clientId: oauthState.clientId,
+          clientSecret: oauthState.clientSecret,
+          config: { accountsServer: oauthState.accountsServer },
+        } as any);
+        await this.storage.updateAccount(account.id, { status: 'active', health: 'unknown' });
+        await this.storage.deleteOAuthState(String(state));
+        return {
+          status: 'complete',
+          account: { id: account.id, slug: account.slug, name: account.name },
+        };
+      }
+
+      if (result.status === 'pending') return { status: 'pending' };
+
+      // `retryable` is passed through so the browser keeps polling through a transport
+      // blip rather than abandoning a flow the user has already approved.
+      return {
+        status: result.status,
+        message: result.message,
+        ...(result.status === 'error' && result.retryable ? { retryable: true } : {}),
+      };
     });
 
     // --- OAuth clients (per-user) ---

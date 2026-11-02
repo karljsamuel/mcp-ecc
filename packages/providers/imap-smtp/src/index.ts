@@ -46,6 +46,13 @@ export class ImapSmtpProvider implements IMailProvider, ICalendarProvider, ICont
   /** Short-lived cache of LIST metadata (folders rarely change; counts are never cached). */
   private folderListCache: { at: number; boxes: ListResponse[] } | null = null;
 
+  /** Mailbox login name. Resolved from config, never assumed to be the account id. */
+  private readonly authUser: string;
+  /** Address used as the From on outbound mail. */
+  private readonly mailboxAddress: string;
+  /** Optional display name applied to the From address. */
+  private readonly senderName: string;
+
   /** How long a cached mailbox list may be reused. */
   private static readonly FOLDER_LIST_TTL_MS = 30_000;
   /** Close the shared connection after this long without a call. */
@@ -57,13 +64,23 @@ export class ImapSmtpProvider implements IMailProvider, ICalendarProvider, ICont
 
   constructor(private accountId: string, private credentials: AccountCredentials) {
     const config = credentials.config || {};
+    const str = (value: unknown): string => (typeof value === 'string' ? value.trim() : '');
+
+    // The mailbox login is not necessarily the internal account id. Accounts created
+    // through the web UI get a random UUID as their id, which no mail server accepts
+    // as a username. Resolution order: an explicitly configured username, then the
+    // mailbox address, then the account id — accounts created by the CLI use the
+    // email address as their id, so that last fallback keeps them working.
+    this.authUser = str(config.username) || str(config.email) || accountId;
+    this.mailboxAddress = str(config.email) || accountId;
+    this.senderName = str(config.displayName);
 
     this.imapConfig = {
       host: config.imapHost || 'imap.gmail.com',
       port: config.imapPort || 993,
       secure: config.imapTls !== false,
       auth: {
-        user: accountId,
+        user: this.authUser,
         pass: credentials.appPassword || '',
       },
       logger: false,
@@ -82,11 +99,27 @@ export class ImapSmtpProvider implements IMailProvider, ICalendarProvider, ICont
       port: config.smtpPort || 465,
       secure: config.smtpSecure !== false,
       auth: {
-        user: accountId,
+        user: this.authUser,
         pass: credentials.appPassword || '',
       },
       tls: { rejectUnauthorized: false },
     } as TransportOptions;
+  }
+
+  /**
+   * The sender identity for outbound mail. Never the internal account id: an account
+   * with no resolvable address fails loudly here rather than emitting a UUID as From.
+   */
+  private senderFrom(): { name?: string; address: string } {
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(this.mailboxAddress)) {
+      throw new Error(
+        `Cannot send from this account: no valid mailbox email address is configured for '${this.accountId}'. ` +
+          'Set the account email (or a username) in the account settings.',
+      );
+    }
+    return this.senderName
+      ? { name: this.senderName, address: this.mailboxAddress }
+      : { address: this.mailboxAddress };
   }
 
   /**
@@ -418,10 +451,13 @@ export class ImapSmtpProvider implements IMailProvider, ICalendarProvider, ICont
   }
 
   async sendMessage(message: SendMessageInput): Promise<EmailMessage> {
+    // Resolved before any transport work so a misconfigured account fails loudly
+    // instead of sending with an internal id as the sender.
+    const from = this.senderFrom();
     const transporter = nodemailer.createTransport(this.smtpConfig);
 
     const mailOptions = {
-      from: this.accountId,
+      from,
       to: message.to.map(a => a.address).join(', '),
       cc: message.cc?.map(a => a.address).join(', '),
       bcc: message.bcc?.map(a => a.address).join(', '),
@@ -432,12 +468,12 @@ export class ImapSmtpProvider implements IMailProvider, ICalendarProvider, ICont
       references: message.references?.join(' '),
     };
 
-    await transporter.sendMail(mailOptions);
+    const info = await transporter.sendMail(mailOptions);
     transporter.close();
 
     return {
-      id: 'sent',
-      from: { address: this.accountId },
+      id: info?.messageId || 'sent',
+      from,
       to: message.to,
       cc: message.cc,
       bcc: message.bcc,

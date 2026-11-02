@@ -7,7 +7,23 @@ import type {
   OAuthFlowType,
 } from './types.js';
 import { StorageAdapter } from './storage.js';
-import { AuthError, ProviderError } from './types.js';
+import { AuthError, DeviceFlowUnsupportedError, ProviderError } from './types.js';
+import type { DevicePollResult } from './types.js';
+
+/**
+ * Whether Microsoft refused a device-authorisation request because the app registration
+ * is not enabled for public client flows.
+ *
+ * Server-side failures are deliberately excluded: a 5xx is transient and must surface,
+ * not silently move the user to a different flow.
+ */
+export function isPublicClientFlowsDisabled(status: number, body: string): boolean {
+  if (status >= 500) return false;
+  const text = body || '';
+  if (/AADSTS7000218/i.test(text)) return true;
+  if (/public client flows?/i.test(text)) return true;
+  return /AADSTS\d+/i.test(text) && /invalid_client|unauthorized_client/i.test(text);
+}
 
 export class OAuthManager {
   constructor(private storage: StorageAdapter) {}
@@ -50,18 +66,42 @@ export class OAuthManager {
       tenantId: resolvedConfig.tenantId,
       accountsServer: resolvedConfig.accountsServer,
       accountId,
+      scopes,
       createdAt: Date.now(),
     };
 
     await this.storage.saveOAuthState(state, oauthState);
 
+    const flow = await this.startProviderFlow(provider, resolvedConfig, flowType, state, codeChallenge);
+
+    // Retain the device-authorisation code so a caller that returns between attempts
+    // (the web UI) can complete the flow on a later request. The CLI polls in-process
+    // and simply ignores it.
+    if (flow.deviceCode) {
+      await this.storage.saveOAuthState(state, {
+        ...oauthState,
+        deviceCode: flow.deviceCode,
+        interval: flow.interval || undefined,
+      });
+    }
+
+    return flow;
+  }
+
+  private async startProviderFlow(
+    provider: ProviderName,
+    config: OAuthConfig,
+    flowType: OAuthFlowType,
+    state: string,
+    codeChallenge: string
+  ): Promise<DeviceCodeResponse & { state: string; codeVerifier: string }> {
     switch (provider) {
       case 'google':
-        return this.startGoogleFlow(resolvedConfig, flowType, state, codeChallenge);
+        return this.startGoogleFlow(config, flowType, state, codeChallenge);
       case 'microsoft':
-        return this.startMicrosoftFlow(resolvedConfig, flowType, state, codeChallenge);
+        return this.startMicrosoftFlow(config, flowType, state, codeChallenge);
       case 'zoho':
-        return this.startZohoFlow(resolvedConfig, flowType, state, codeChallenge);
+        return this.startZohoFlow(config, flowType, state, codeChallenge);
       default:
         throw new AuthError(`Unsupported provider for OAuth: ${provider}`);
     }
@@ -178,6 +218,72 @@ export class OAuthManager {
     throw new AuthError('Device code flow timed out');
   }
 
+  /**
+   * A single poll against the device token endpoint.
+   *
+   * `pollDeviceCode` owns a retry loop, which suits the CLI because it owns the
+   * process. The web UI has to return between attempts so the browser can drive the
+   * cadence, and it needs the reason an attempt did not succeed — a pending
+   * authorisation, an expired code and a real error are different things to show.
+   */
+  async pollDeviceCodeOnce(deviceCode: string, config: OAuthConfig): Promise<DevicePollResult> {
+    const tokenUrl = this.getDeviceTokenUrl(config.provider, config.tenantId, config.accountsServer);
+    const isZoho = config.provider === 'zoho';
+    const body: Record<string, string> = isZoho
+      ? {
+          client_id: config.clientId,
+          client_secret: config.clientSecret || '',
+          grant_type: 'device_token',
+          code: deviceCode,
+        }
+      : {
+          client_id: config.clientId,
+          device_code: deviceCode,
+          grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+        };
+    if (!isZoho && config.clientSecret) body.client_secret = config.clientSecret;
+
+    let response: Response;
+    let data: any;
+    try {
+      response = await fetch(tokenUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams(body).toString(),
+      });
+      data = await response.json();
+    } catch (error: any) {
+      // No HTTP response at all — DNS, timeout, connection reset. The authorisation may
+      // still be pending, so this is retryable: reporting it as terminal would make the
+      // caller abandon a flow the user has already approved.
+      return { status: 'error', message: error?.message || 'Device authorisation poll failed', retryable: true };
+    }
+
+    const errorCode = data?.error;
+    if (errorCode === 'authorization_pending' || errorCode === 'slow_down') return { status: 'pending' };
+    if (errorCode === 'expired_token' || errorCode === 'bad_verification_code' || errorCode === 'code_expired') {
+      return { status: 'expired', message: data?.error_description || 'The device code has expired' };
+    }
+    if (errorCode) {
+      return { status: 'error', message: `${errorCode}${data?.error_description ? ` - ${data.error_description}` : ''}` };
+    }
+    if (!response.ok) {
+      return { status: 'error', message: `Device authorisation failed: ${response.status} ${response.statusText}` };
+    }
+
+    return {
+      status: 'complete',
+      tokens: {
+        accessToken: data.access_token,
+        refreshToken: data.refresh_token,
+        expiresAt: Date.now() + data.expires_in * 1000,
+        scope: data.scope || (config.scopes || []).join(' '),
+        idToken: data.id_token,
+        tokenType: data.token_type || 'Bearer',
+      },
+    };
+  }
+
   private async startGoogleFlow(
     config: OAuthConfig,
     flowType: OAuthFlowType,
@@ -263,9 +369,16 @@ export class OAuthManager {
       if (!response.ok) {
         let errDetail = '';
         try {
-          errDetail = ` - ${await response.text()}`;
+          errDetail = await response.text();
         } catch {}
-        throw new AuthError(`Failed to initiate Microsoft device flow: ${response.status} ${response.statusText}${errDetail}`);
+        const message = `Failed to initiate Microsoft device flow: ${response.status} ${response.statusText}${errDetail ? ` - ${errDetail}` : ''}`;
+        // A registration that is not enabled for public client flows cannot use the
+        // device flow at all. Worth distinguishing from a real failure, because the
+        // caller may legitimately fall back to the browser flow.
+        if (isPublicClientFlowsDisabled(response.status, errDetail)) {
+          throw new DeviceFlowUnsupportedError(message);
+        }
+        throw new AuthError(message);
       }
 
       const data: any = await response.json();
