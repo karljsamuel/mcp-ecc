@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   accountsApi,
   infoApi,
@@ -360,6 +360,12 @@ function CreateAccountModal({
   const [slug, setSlug] = useState('');
   const [email, setEmail] = useState('');
   const [mail, setMail] = useState<MailSettings>({});
+  const [deviceFlow, setDeviceFlow] = useState<{
+    userCode?: string;
+    verificationUri?: string;
+    state?: string;
+    interval?: number;
+  } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -429,6 +435,17 @@ function CreateAccountModal({
         }
       }
       const result = await accountsApi.create(payload);
+      if (result.flowType === 'device_code') {
+        // A device flow needs the user to approve in another tab and then be exchanged
+        // server-side, so keep this modal open and let the panel drive it to completion.
+        setDeviceFlow({
+          userCode: result.userCode,
+          verificationUri: result.verificationUri,
+          state: result.state,
+          interval: result.interval,
+        });
+        return;
+      }
       if (result.authorizeUrl) {
         window.open(result.authorizeUrl, '_blank', 'noopener');
         push(result.message ?? 'Account created. Complete authorisation in the new tab.', 'info');
@@ -445,6 +462,33 @@ function CreateAccountModal({
 
   return (
     <Modal open={open} onClose={onClose} title="Add account">
+      {deviceFlow ? (
+        <>
+          <p className="mb-3 text-sm text-slate-600">
+            The account has been created and is waiting for approval. This panel updates as soon
+            as you approve it — you can close it and approve later.
+          </p>
+          <DeviceAuthPanel
+            userCode={deviceFlow.userCode}
+            verificationUri={deviceFlow.verificationUri}
+            state={deviceFlow.state}
+            intervalSeconds={deviceFlow.interval}
+            onComplete={() => {
+              push(`Account "${name || email}" created`, 'success');
+              onCreated();
+            }}
+            onFailed={(message) => setError(message)}
+          />
+          {error && (
+            <div className="mb-3">
+              <Alert tone="error">{error}</Alert>
+            </div>
+          )}
+          <div className="flex justify-end pt-2">
+            <button type="button" onClick={onClose} className="btn-secondary">Close</button>
+          </div>
+        </>
+      ) : (
       <form onSubmit={submit} className="space-y-4">
         {error && <Alert tone="error">{error}</Alert>}
         <div>
@@ -572,7 +616,143 @@ function CreateAccountModal({
           </button>
         </div>
       </form>
+      )}
     </Modal>
+  );
+}
+
+/* --------------------------- device authorisation --------------------- */
+
+/** How long to keep polling before treating the code as expired (codes last ~15 min). */
+const DEVICE_AUTH_TIMEOUT_MS = 15 * 60 * 1000;
+
+/**
+ * Completes a device-authorisation flow in the browser.
+ *
+ * The token exchange happens server-side, so this only drives the cadence: it polls
+ * once per interval and shows what the user has to do. It stays on screen until the
+ * flow completes, expires, or fails — a device flow cannot be finished by opening a
+ * tab and walking away, which is why the code has to be readable here.
+ */
+function DeviceAuthPanel({
+  userCode,
+  verificationUri,
+  state,
+  intervalSeconds,
+  onComplete,
+  onFailed,
+}: {
+  userCode?: string;
+  verificationUri?: string;
+  state?: string;
+  intervalSeconds?: number;
+  onComplete: () => void;
+  onFailed: (message: string) => void;
+}) {
+  const [status, setStatus] = useState<'waiting' | 'expired' | 'error'>('waiting');
+  const [message, setMessage] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  // Kept in refs so the polling effect does not restart when a parent re-renders.
+  const complete = useRef(onComplete);
+  const failed = useRef(onFailed);
+  complete.current = onComplete;
+  failed.current = onFailed;
+
+  const intervalMs = Math.max(5, intervalSeconds ?? 5) * 1000;
+
+  useEffect(() => {
+    if (!state) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = Date.now() + DEVICE_AUTH_TIMEOUT_MS;
+
+    const poll = async () => {
+      if (cancelled) return;
+      if (Date.now() > deadline) {
+        setStatus('expired');
+        setMessage('The code expired before it was approved. Start again to get a new one.');
+        return;
+      }
+      try {
+        const result = await accountsApi.pollDeviceAuth(state);
+        if (cancelled) return;
+        if (result.status === 'complete') {
+          complete.current();
+          return;
+        }
+        if (result.status === 'pending') {
+          timer = setTimeout(() => void poll(), intervalMs);
+          return;
+        }
+        setStatus(result.status === 'expired' ? 'expired' : 'error');
+        setMessage(result.message ?? null);
+        if (result.status === 'error') failed.current(result.message ?? 'Authorisation failed');
+      } catch (err) {
+        if (cancelled) return;
+        // A dropped poll is not fatal: keep trying until the deadline.
+        setMessage((err as Error).message);
+        timer = setTimeout(() => void poll(), intervalMs);
+      }
+    };
+
+    void poll();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [state, intervalMs]);
+
+  return (
+    <div className="mb-4 rounded-lg border border-indigo-200 bg-indigo-50 p-4">
+      <div className="text-sm font-semibold text-indigo-900">Approve this sign-in</div>
+      <ol className="mt-2 list-decimal space-y-1 pl-5 text-sm text-indigo-900">
+        <li>
+          Open{' '}
+          {verificationUri ? (
+            <a className="font-medium underline" href={verificationUri} target="_blank" rel="noreferrer">
+              {verificationUri}
+            </a>
+          ) : (
+            'the verification page'
+          )}
+        </li>
+        <li>Enter this code:</li>
+      </ol>
+
+      <div className="mt-2 flex items-center gap-3">
+        <code className="rounded bg-white px-3 py-2 font-mono text-lg font-bold tracking-widest text-indigo-700">
+          {userCode || '—'}
+        </code>
+        {userCode && (
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={() => {
+              void navigator.clipboard?.writeText(userCode).then(() => {
+                setCopied(true);
+                setTimeout(() => setCopied(false), 2000);
+              });
+            }}
+          >
+            {copied ? 'Copied' : 'Copy code'}
+          </button>
+        )}
+      </div>
+
+      <div className="mt-3 text-sm">
+        {status === 'waiting' && !message && (
+          <span className="text-indigo-800">Waiting for approval…</span>
+        )}
+        {status === 'waiting' && message && <span className="text-amber-700">{message}</span>}
+        {status === 'expired' && (
+          <span className="text-amber-700">{message ?? 'The code expired.'}</span>
+        )}
+        {status === 'error' && (
+          <span className="text-red-700">Authorisation failed{message ? `: ${message}` : '.'}</span>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -605,7 +785,7 @@ function AccountDetailModal({
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [reauthClientId, setReauthClientId] = useState<string>('');
-  const [reauthFlow, setReauthFlow] = useState<{ verificationUri?: string; userCode?: string; message?: string } | null>(null);
+  const [reauthFlow, setReauthFlow] = useState<{ verificationUri?: string; userCode?: string; message?: string; state?: string; interval?: number; device?: boolean } | null>(null);
 
   const authenticated = isAuthenticatedAccount(account);
 
@@ -670,6 +850,18 @@ function AccountDetailModal({
     setError(null);
     try {
       const res = await accountsApi.reauth(account.id, reauthClientId || undefined);
+      if (res.flowType === 'device_code') {
+        // The panel below completes this flow; opening a tab would only show the code.
+        setReauthFlow({
+          userCode: res.userCode,
+          verificationUri: res.verificationUri,
+          state: res.state,
+          interval: res.interval,
+          device: true,
+        });
+        push('Enter the code shown to re-authenticate', 'info');
+        return;
+      }
       setReauthFlow({ verificationUri: res.verificationUri || res.authorizeUrl, userCode: res.userCode, message: res.message });
       push(res.message ?? 'Re-auth flow started', 'info');
       if (res.authorizeUrl) {
@@ -758,11 +950,26 @@ function AccountDetailModal({
 
       {reauthFlow && (
         <div className="mb-4">
-          <Alert tone="info">
-            <div>{reauthFlow.message || 'Complete reauthentication.'}</div>
-            {reauthFlow.verificationUri && <div className="mt-2"><a className="font-medium underline" href={reauthFlow.verificationUri} target="_blank" rel="noreferrer">Open authorisation page</a></div>}
-            {reauthFlow.userCode && <div className="mt-2 font-mono font-bold">Code: {reauthFlow.userCode}</div>}
-          </Alert>
+          {reauthFlow.device ? (
+            <DeviceAuthPanel
+              userCode={reauthFlow.userCode}
+              verificationUri={reauthFlow.verificationUri}
+              state={reauthFlow.state}
+              intervalSeconds={reauthFlow.interval}
+              onComplete={() => {
+                push('Re-authentication completed', 'success');
+                setReauthFlow(null);
+                onUpdated();
+              }}
+              onFailed={(message) => setError(message)}
+            />
+          ) : (
+            <Alert tone="info">
+              <div>{reauthFlow.message || 'Complete reauthentication.'}</div>
+              {reauthFlow.verificationUri && <div className="mt-2"><a className="font-medium underline" href={reauthFlow.verificationUri} target="_blank" rel="noreferrer">Open authorisation page</a></div>}
+              {reauthFlow.userCode && <div className="mt-2 font-mono font-bold">Code: {reauthFlow.userCode}</div>}
+            </Alert>
+          )}
         </div>
       )}
 

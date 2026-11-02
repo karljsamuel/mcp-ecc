@@ -206,14 +206,23 @@ export interface ReauthResult {
   deviceCode?: string;
   interval?: number;
   state?: string;
+  /** Which flow the server actually chose; Microsoft may fall back to the browser. */
+  flowType?: 'authorization_code' | 'device_code';
   message?: string;
+}
+
+/** One poll of a device-authorisation flow. */
+export interface DeviceAuthPollResult {
+  status: 'pending' | 'complete' | 'expired' | 'error';
+  message?: string;
+  account?: { id: string; slug: string; name: string };
 }
 
 export const accountsApi = {
   list: () => get<{ accounts: Account[] }>('/api/accounts'),
   get: (id: string) => get<{ account: Account }>(`/api/accounts/${id}`),
   create: (input: AccountCreateInput) =>
-    send<{ account?: Account; authorizeUrl?: string; state?: string }>('/api/accounts', 'POST', input),
+    send<ReauthResult & { account?: Account }>('/api/accounts', 'POST', input),
   remove: (id: string) => send<{ success: boolean }>(`/api/accounts/${id}`, 'DELETE'),
   update: (
     id: string,
@@ -221,6 +230,12 @@ export const accountsApi = {
   ) => send<{ account: Account }>(`/api/accounts/${id}`, 'PATCH', patch),
   reauth: (id: string, oauthClientId?: string) =>
     send<ReauthResult>(`/api/accounts/${id}/reauth`, 'POST', oauthClientId ? { oauthClientId } : {}),
+  /**
+   * One poll of a device-authorisation flow. The token exchange happens server-side,
+   * so the browser never holds the device code — it only drives the cadence.
+   */
+  pollDeviceAuth: (state: string) =>
+    send<DeviceAuthPollResult>('/api/oauth/device/poll', 'POST', { state }),
   testConnection: (id: string) =>
     send<TestConnectionResult>(`/api/accounts/${id}/test-connection`, 'POST', {}),
 };
