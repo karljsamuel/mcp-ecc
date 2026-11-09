@@ -24,9 +24,9 @@
   "devDependencies": {
     "typescript": "^7.0.2",
     "@types/node": "^26.6.6",
-    "vitest": "^5.0.5",
+    "vitest": "^5.1.0",
     "eslint": "^10.9.1",
-    "@cloudflare/workers-types": "^5.20260829.1"
+    "@cloudflare/workers-types": "^5.20261106.1"
   },
   "publishConfig": {
     "access": "public"
