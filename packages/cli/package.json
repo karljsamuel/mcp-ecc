@@ -31,9 +31,9 @@
     "@mcp-ecc/storage-sqlite": "file:../storage/sqlite",
     "@mcp-ecc/storage-d1": "file:../storage/d1",
     "@mcp-ecc/mcp-server": "file:../mcp-server",
-    "commander": "^15.0.0",
+    "commander": "^15.1.0",
     "chalk": "^6.0.0",
-    "dotenv": "^18.0.9"
+    "dotenv": "^18.0.10"
   },
   "devDependencies": {
     "typescript": "^7.0.2",
